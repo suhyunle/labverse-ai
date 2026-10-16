@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Camera, RotateCcw, ArrowRight, Trash2, BookOpen, Layers } from 'lucide-react';
 import { ExperimentSnapshot } from '../types';
 import { sound } from '../lib/audio';
+import { KOREAN_LABEL_MAP } from './TelemetryDisplay';
 
 interface LabNotebookModalProps {
   isOpen: boolean;
@@ -132,21 +133,23 @@ export const LabNotebookModal: React.FC<LabNotebookModalProps> = ({
                         </div>
 
                         {/* Variables summary */}
-                        <div className="grid grid-cols-2 gap-1 text-[11px] font-mono text-slate-400 mb-2">
+                        <div className="grid grid-cols-2 gap-1.5 text-[11px] text-slate-300 mb-2">
                           {Object.entries(snap.variables).map(([k, v]) => (
-                            <div key={k} className="truncate">
-                              {k}: <span className="text-cyan-300 font-semibold">{v}</span>
+                            <div key={k} className="leading-snug break-words">
+                              <span className="text-slate-400">{KOREAN_LABEL_MAP[k] || k}:</span>{' '}
+                              <span className="text-cyan-300 font-semibold">{v}</span>
                             </div>
                           ))}
                         </div>
 
                         {/* Metrics summary */}
-                        <div className="p-1.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-300 font-mono">
+                        <div className="p-2 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-300">
                           {Object.entries(snap.metrics)
-                            .slice(0, 2)
+                            .slice(0, 3)
                             .map(([k, v]) => (
-                              <div key={k} className="truncate">
-                                {k}: <span className="text-amber-300">{v}</span>
+                              <div key={k} className="leading-snug break-words">
+                                <span className="text-slate-400">{KOREAN_LABEL_MAP[k] || k}:</span>{' '}
+                                <span className="text-amber-300 font-semibold">{v}</span>
                               </div>
                             ))}
                         </div>
@@ -222,10 +225,11 @@ export const LabNotebookModal: React.FC<LabNotebookModalProps> = ({
               <div className="grid grid-cols-2 gap-4 mb-3">
                 <div className="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/30">
                   <div className="font-bold text-cyan-300 mb-1">[스냅샷 A] {snapA.label}</div>
-                  <div className="space-y-1 font-mono text-[11px] text-slate-300">
+                  <div className="space-y-1 text-[11px] text-slate-300">
                     {Object.entries(snapA.variables).map(([k, v]) => (
                       <div key={k}>
-                        {k}: <span className="text-white font-semibold">{v}</span>
+                        <span className="text-slate-400">{KOREAN_LABEL_MAP[k] || k}:</span>{' '}
+                        <span className="text-white font-semibold">{v}</span>
                       </div>
                     ))}
                   </div>
@@ -233,10 +237,11 @@ export const LabNotebookModal: React.FC<LabNotebookModalProps> = ({
 
                 <div className="p-2.5 rounded-lg bg-indigo-950/30 border border-indigo-500/30">
                   <div className="font-bold text-indigo-300 mb-1">[스냅샷 B] {snapB.label}</div>
-                  <div className="space-y-1 font-mono text-[11px] text-slate-300">
+                  <div className="space-y-1 text-[11px] text-slate-300">
                     {Object.entries(snapB.variables).map(([k, v]) => (
                       <div key={k}>
-                        {k}: <span className="text-white font-semibold">{v}</span>
+                        <span className="text-slate-400">{KOREAN_LABEL_MAP[k] || k}:</span>{' '}
+                        <span className="text-white font-semibold">{v}</span>
                       </div>
                     ))}
                   </div>

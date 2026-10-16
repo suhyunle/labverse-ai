@@ -268,8 +268,11 @@ const PRESET_EXPERIMENTS: Record<string, any> = {
       { id: 'magmaViscosity', label: '마그마 점성', min: 10, max: 90, default: 40, step: 1, unit: 'Pa·s', description: '규산염 함량에 따른 점성' },
     ],
     observableOutputs: [
+      { id: 'chamberStress', label: '마그마 방 응력', unit: 'MPa', description: '마그마 챔버 외벽 지각 응력' },
       { id: 'plumeHeight', label: '화산재 분연주 고도', unit: 'km', description: '치솟는 화산재 구름 고도' },
       { id: 'veiScale', label: '화산 폭발 지수 (VEI)', unit: '등급', description: '분화 강도 척도 (0~6)' },
+      { id: 'conduitVelocity', label: '화도 분출 속도', unit: 'm/s', description: '상승하는 마그마의 화도 내 유속' },
+      { id: 'eruptionType', label: '분화 양식', unit: '', description: '현재 분출 거동 분류' },
     ],
     simulationModel: 'volcano_thermodynamics_v2',
     visualEffects: ['cross_section_cutaway', 'pulsating_magma_chamber', 'pyroclastic_flow', 'ballistic_bombs'],
@@ -348,57 +351,54 @@ app.post('/api/plan-experiment', async (req: Request, res: Response) => {
     }
 
     const trimmed = query.trim();
-    const lower = trimmed.toLowerCase();
 
-    // Fast keyword routing to high-fidelity deterministic engines
-    if (lower.includes('낙하') || lower.includes('피사') || lower.includes('갈릴레오') || lower.includes('자유낙하') || lower.includes('gravity') || lower.includes('free fall')) {
-      const exp = { ...PRESET_EXPERIMENTS.gravity, id: `exp-gravity-${Date.now()}` };
-      res.json({ experiment: exp });
-      return;
-    }
-    if (lower.includes('빛') || lower.includes('굴절') || lower.includes('스넬') || lower.includes('전반사') || lower.includes('optics') || lower.includes('refraction')) {
-      const exp = { ...PRESET_EXPERIMENTS.optics, id: `exp-optics-${Date.now()}` };
-      res.json({ experiment: exp });
-      return;
-    }
-    if (lower.includes('액체') || lower.includes('성층') || lower.includes('기름과 물') || lower.includes('비혼화') || lower.includes('밀도 기둥')) {
-      const exp = { ...PRESET_EXPERIMENTS.fluid, id: `exp-fluid-${Date.now()}` };
-      res.json({ experiment: exp });
-      return;
-    }
-    if (lower.includes('화산') || lower.includes('마그마') || lower.includes('volcano')) {
-      const exp = { ...PRESET_EXPERIMENTS.volcano, id: `exp-volcano-${Date.now()}` };
-      res.json({ experiment: exp });
-      return;
-    }
-    if (lower.includes('태양계') || lower.includes('지구와 달') || lower.includes('공전') || lower.includes('solar')) {
-      const exp = { ...PRESET_EXPERIMENTS.solar_system, id: `exp-solar-${Date.now()}` };
-      res.json({ experiment: exp });
-      return;
-    }
-
-    // Call Gemini API if available
+    // Call Gemini API if available (gemini-4-argon primary -> gemini-3.8-flash fallback)
     if (apiKey) {
       try {
         const systemPrompt = `You are the Lead Scientific Experiment Architect at GENESIS LAB 3.0.
 Your mission is to map any scientific inquiry into one of the verified simulation environments:
+- 'volcano' (magma chamber pressure, eruption dynamics, cross-section cutaway)
 - 'gravity' (free fall, vacuum, air drag, Galileo experiments)
 - 'optics' (Snell's law, laser refraction, reflection, critical angle TIR)
 - 'fluid' (immiscible fluid stratification, density columns)
-- 'volcano' (magma chamber pressure, eruption dynamics)
 - 'solar_system' (orbital mechanics, Kepler's laws, Earth-Moon tides)
 - 'conceptual' (general conceptual visualization)
 
-Return strictly valid JSON conforming to ExperimentSpec. Include verified academic citations, evidence items, and guided steps.`;
+Return strictly valid JSON conforming to ExperimentSpec.
+All text must be fluent Korean.
+For volcano experiments:
+- ensure observableOutputs contains:
+  { "id": "chamberStress", "label": "마그마 방 응력", "unit": "MPa" }
+  { "id": "plumeHeight", "label": "화산재 분연주 고도", "unit": "km" }
+  { "id": "veiScale", "label": "화산 폭발 지수 (VEI)", "unit": "등급" }
+  { "id": "conduitVelocity", "label": "화도 분출 속도", "unit": "m/s" }
+  { "id": "eruptionType", "label": "분화 양식", "unit": "" }`;
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: `사용자의 질문: "${trimmed}". 상응하는 과학 실험실 스펙 JSON을 생성해줘.`,
-          config: {
-            systemInstruction: systemPrompt,
-            responseMimeType: 'application/json',
-          },
-        });
+        let response;
+        try {
+          const argonCall = ai.models.generateContent({
+            model: 'gemini-4-argon',
+            contents: `사용자의 과학 탐구 질문: "${trimmed}". 상응하는 인터랙티브 실험실 스펙 JSON을 생성해줘.`,
+            config: {
+              systemInstruction: systemPrompt,
+              responseMimeType: 'application/json',
+            },
+          });
+          const argonTimeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('gemini-4-argon response timeout (15s)')), 15000)
+          );
+          response = await Promise.race([argonCall, argonTimeout]);
+        } catch (argonErr) {
+          console.warn('gemini-4-argon failed or unavailable, falling back to gemini-3.8-flash:', argonErr);
+          response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: `사용자의 과학 탐구 질문: "${trimmed}". 상응하는 인터랙티브 실험실 스펙 JSON을 생성해줘.`,
+            config: {
+              systemInstruction: systemPrompt,
+              responseMimeType: 'application/json',
+            },
+          });
+        }
 
         const rawText = response.text || '';
         const cleaned = rawText.trim().replace(/^```json\s*/i, '').replace(/```$/i, '').trim();

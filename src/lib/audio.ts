@@ -6,14 +6,36 @@
 class SoundSynthesizer {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
+  private hasInteracted: boolean = false;
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      const enable = () => {
+        this.hasInteracted = true;
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume().catch(() => {});
+        }
+        window.removeEventListener('pointerdown', enable);
+        window.removeEventListener('keydown', enable);
+      };
+      window.addEventListener('pointerdown', enable, { once: true });
+      window.addEventListener('keydown', enable, { once: true });
+    }
+  }
 
   private getContext(): AudioContext | null {
     if (this.isMuted) return null;
     if (typeof window === 'undefined') return null;
+    if (!this.hasInteracted) return null; // Avoid autoplay console warning before user gesture
+
     if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
-        this.ctx = new AudioCtx();
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          this.ctx = new AudioCtx();
+        }
+      } catch {
+        return null;
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
