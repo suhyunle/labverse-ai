@@ -6,11 +6,22 @@ import { TelemetryDisplay } from './components/TelemetryDisplay';
 import { ScientistCompanion } from './components/ScientistCompanion';
 import { GuidedSteps } from './components/GuidedSteps';
 import { LabNotebookModal } from './components/LabNotebookModal';
+import { ParallelUniverseMode } from './components/ParallelUniverseMode';
+import { HypothesisArena } from './components/HypothesisArena';
+import { EvidenceLens } from './components/EvidenceLens';
+import { ResearchTree } from './components/ResearchTree';
+import { PaperToLabModal } from './components/PaperToLabModal';
+import { DiagramToLabModal } from './components/DiagramToLabModal';
+
+import { GravitySimulation } from './simulations/GravitySimulation';
+import { OpticsSimulation } from './simulations/OpticsSimulation';
+import { FluidSimulation } from './simulations/FluidSimulation';
 import { VolcanoSimulation } from './simulations/VolcanoSimulation';
 import { SolarSystemSimulation } from './simulations/SolarSystemSimulation';
 import { BuoyancySimulation } from './simulations/BuoyancySimulation';
 import { ConceptualSimulation } from './simulations/ConceptualSimulation';
-import { ExperimentSpec, ExperimentSnapshot } from './types';
+
+import { ExperimentSpec, ExperimentSnapshot, ResearchTreeNode, LearningLevel } from './types';
 import { sound } from './lib/audio';
 
 export default function App() {
@@ -23,33 +34,60 @@ export default function App() {
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadingStep, setLoadingStep] = useState<string>('');
+  const [learningLevel, setLearningLevel] = useState<LearningLevel>('intermediate');
 
+  // Modals state
+  const [isNotebookOpen, setIsNotebookOpen] = useState<boolean>(false);
+  const [isParallelUniverseOpen, setIsParallelUniverseOpen] = useState<boolean>(false);
+  const [isHypothesisArenaOpen, setIsHypothesisArenaOpen] = useState<boolean>(false);
+  const [isEvidenceLensOpen, setIsEvidenceLensOpen] = useState<boolean>(false);
+  const [isResearchTreeOpen, setIsResearchTreeOpen] = useState<boolean>(false);
+  const [isPaperToLabOpen, setIsPaperToLabOpen] = useState<boolean>(false);
+  const [isDiagramToLabOpen, setIsDiagramToLabOpen] = useState<boolean>(false);
+
+  // Snapshots
   const [snapshots, setSnapshots] = useState<ExperimentSnapshot[]>(() => {
     try {
-      const saved = localStorage.getItem('science_universe_snapshots');
+      const saved = localStorage.getItem('genesis_lab_snapshots');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
-  const [isNotebookOpen, setIsNotebookOpen] = useState<boolean>(false);
+
+  // Research Branching Tree
+  const [researchNodes, setResearchNodes] = useState<ResearchTreeNode[]>(() => {
+    try {
+      const saved = localStorage.getItem('genesis_lab_research_nodes');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [currentNodeId, setCurrentNodeId] = useState<string | null>(null);
+
   const [isMuted, setIsMuted] = useState<boolean>(false);
 
-  // Sync snapshot changes to localStorage
+  // Sync to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem('science_universe_snapshots', JSON.stringify(snapshots));
+      localStorage.setItem('genesis_lab_snapshots', JSON.stringify(snapshots));
     } catch {}
   }, [snapshots]);
 
-  // Audio mute toggle
+  useEffect(() => {
+    try {
+      localStorage.setItem('genesis_lab_research_nodes', JSON.stringify(researchNodes));
+    } catch {}
+  }, [researchNodes]);
+
   const handleToggleMute = () => {
     const next = !isMuted;
     setIsMuted(next);
     sound.setMuted(next);
   };
 
-  // 1. AI Experiment Planner action
+  // Plan or synthesize experiment
   const handlePlanExperiment = async (query: string) => {
     setIsLoading(true);
     setLoadingStep('1. 질문 의도 및 물리 법칙 해석 중...');
@@ -72,21 +110,7 @@ export default function App() {
       const data = await res.json();
       if (!data.experiment) throw new Error('Invalid experiment specification');
 
-      const exp: ExperimentSpec = data.experiment;
-
-      // Initialize variables from spec defaults
-      const initialVars: Record<string, number> = {};
-      exp.variables.forEach((v) => {
-        initialVars[v.id] = v.default;
-      });
-
-      setCurrentExperiment(exp);
-      setVariables(initialVars);
-      setLiveMetrics({});
-      setCameraPreset(exp.sceneType === 'volcano' ? 'cross_section' : 'default');
-      setShowCrossSection(true);
-
-      sound.playEureka();
+      loadExperimentSpec(data.experiment);
     } catch (err) {
       console.error('Experiment planning error:', err);
     } finally {
@@ -97,7 +121,34 @@ export default function App() {
     }
   };
 
-  // 2. Change a single variable with bounds check
+  const loadExperimentSpec = (exp: ExperimentSpec) => {
+    const initialVars: Record<string, number> = {};
+    exp.variables.forEach((v) => {
+      initialVars[v.id] = v.default;
+    });
+
+    setCurrentExperiment(exp);
+    setVariables(initialVars);
+    setLiveMetrics({});
+    setCameraPreset(exp.sceneType === 'volcano' ? 'cross_section' : 'default');
+    setShowCrossSection(true);
+
+    // Create Root Research Tree Node if tree is empty or new topic
+    const newNode: ResearchTreeNode = {
+      id: `node-${Date.now()}`,
+      parentId: currentNodeId,
+      label: exp.title,
+      sceneType: exp.sceneType,
+      variables: initialVars,
+      metrics: {},
+      timestamp: Date.now(),
+    };
+    setResearchNodes((prev) => [newNode, ...prev]);
+    setCurrentNodeId(newNode.id);
+
+    sound.playEureka();
+  };
+
   const handleChangeVariable = (id: string, value: number) => {
     if (!currentExperiment) return;
     const spec = currentExperiment.variables.find((v) => v.id === id);
@@ -108,7 +159,6 @@ export default function App() {
     setVariables((prev) => ({ ...prev, [id]: clamped }));
   };
 
-  // 3. Batch apply variables from Dr. Nova AI Scientist
   const handleApplyVariableUpdates = (updates: Record<string, number>) => {
     if (!currentExperiment) return;
     setVariables((prev) => {
@@ -125,7 +175,6 @@ export default function App() {
     });
   };
 
-  // 4. Reset variables to defaults
   const handleResetVariables = () => {
     if (!currentExperiment) return;
     const defaults: Record<string, number> = {};
@@ -136,7 +185,7 @@ export default function App() {
     setCameraPreset(currentExperiment.sceneType === 'volcano' ? 'cross_section' : 'default');
   };
 
-  // 5. Take Snapshot
+  // Snapshot handling
   const handleTakeSnapshot = (label?: string) => {
     if (!currentExperiment) return;
     const newSnapshot: ExperimentSnapshot = {
@@ -150,20 +199,37 @@ export default function App() {
     sound.playEureka();
   };
 
-  // 6. Restore Snapshot
   const handleRestoreSnapshot = (snap: ExperimentSnapshot) => {
     setVariables({ ...snap.variables });
     sound.playClick();
   };
 
-  // 7. Delete Snapshot
   const handleDeleteSnapshot = (id: string) => {
     setSnapshots((prev) => prev.filter((s) => s.id !== id));
   };
 
-  // 8. Go back to Landing
-  const handleNewExperiment = () => {
-    setCurrentExperiment(null);
+  // Research Tree Branching
+  const handleForkNode = (label: string, hypothesis?: string) => {
+    if (!currentExperiment) return;
+    const newNode: ResearchTreeNode = {
+      id: `node-${Date.now()}`,
+      parentId: currentNodeId,
+      label,
+      sceneType: currentExperiment.sceneType,
+      variables: { ...variables },
+      metrics: { ...liveMetrics },
+      hypothesis,
+      timestamp: Date.now(),
+    };
+    setResearchNodes((prev) => [newNode, ...prev]);
+    setCurrentNodeId(newNode.id);
+    sound.playEureka();
+  };
+
+  const handleSelectTreeNode = (node: ResearchTreeNode) => {
+    setVariables({ ...node.variables });
+    setCurrentNodeId(node.id);
+    sound.playClick();
   };
 
   return (
@@ -171,25 +237,55 @@ export default function App() {
       {/* Top Header */}
       <Header
         currentExperiment={currentExperiment}
-        onNewExperiment={handleNewExperiment}
+        onNewExperiment={() => setCurrentExperiment(null)}
         onResetVariables={handleResetVariables}
         onOpenNotebook={() => setIsNotebookOpen(true)}
+        onOpenPaperToLab={() => setIsPaperToLabOpen(true)}
+        onOpenParallelUniverse={() => setIsParallelUniverseOpen(true)}
+        onOpenHypothesisArena={() => setIsHypothesisArenaOpen(true)}
+        onOpenEvidenceLens={() => setIsEvidenceLensOpen(true)}
+        onOpenResearchTree={() => setIsResearchTreeOpen(true)}
         snapshotCount={snapshots.length}
+        learningLevel={learningLevel}
+        onChangeLearningLevel={setLearningLevel}
         isMuted={isMuted}
         onToggleMute={handleToggleMute}
       />
 
-      {/* Main View: Landing vs 3D Laboratory */}
+      {/* Main View: Landing vs 3D/Canvas Laboratory */}
       {!currentExperiment ? (
         <LandingHero
           onSearch={handlePlanExperiment}
+          onOpenPaperToLab={() => setIsPaperToLabOpen(true)}
+          onOpenDiagramToLab={() => setIsDiagramToLabOpen(true)}
           isLoading={isLoading}
           loadingStep={loadingStep}
         />
       ) : (
         <main className="relative w-full h-full pt-14">
-          {/* Central 3D Simulation Canvas */}
+          {/* Central Active Simulation Canvas */}
           <div className="absolute inset-0 top-14 z-10">
+            {currentExperiment.sceneType === 'gravity' && (
+              <GravitySimulation
+                variables={variables}
+                onUpdateMetrics={setLiveMetrics}
+              />
+            )}
+
+            {currentExperiment.sceneType === 'optics' && (
+              <OpticsSimulation
+                variables={variables}
+                onUpdateMetrics={setLiveMetrics}
+              />
+            )}
+
+            {currentExperiment.sceneType === 'fluid' && (
+              <FluidSimulation
+                variables={variables}
+                onUpdateMetrics={setLiveMetrics}
+              />
+            )}
+
             {currentExperiment.sceneType === 'volcano' && (
               <VolcanoSimulation
                 variables={variables}
@@ -269,6 +365,55 @@ export default function App() {
             onTakeSnapshot={handleTakeSnapshot}
             onRestoreSnapshot={handleRestoreSnapshot}
             onDeleteSnapshot={handleDeleteSnapshot}
+          />
+
+          {/* Parallel Universe Modal (Split-Screen) */}
+          <ParallelUniverseMode
+            isOpen={isParallelUniverseOpen}
+            onClose={() => setIsParallelUniverseOpen(false)}
+            experimentSpec={currentExperiment}
+            currentVariables={variables}
+          />
+
+          {/* Hypothesis Arena Modal */}
+          <HypothesisArena
+            isOpen={isHypothesisArenaOpen}
+            onClose={() => setIsHypothesisArenaOpen(false)}
+            experimentSpec={currentExperiment}
+            currentVariables={variables}
+            liveMetrics={liveMetrics}
+            onApplyFollowUpVariables={handleApplyVariableUpdates}
+          />
+
+          {/* Evidence Lens Modal */}
+          <EvidenceLens
+            isOpen={isEvidenceLensOpen}
+            onClose={() => setIsEvidenceLensOpen(false)}
+            evidenceItems={currentExperiment.evidenceItems}
+          />
+
+          {/* Branching Research Tree Modal */}
+          <ResearchTree
+            nodes={researchNodes}
+            currentNodeId={currentNodeId}
+            isOpen={isResearchTreeOpen}
+            onClose={() => setIsResearchTreeOpen(false)}
+            onForkNode={handleForkNode}
+            onSelectNode={handleSelectTreeNode}
+          />
+
+          {/* Paper-to-Lab Modal */}
+          <PaperToLabModal
+            isOpen={isPaperToLabOpen}
+            onClose={() => setIsPaperToLabOpen(false)}
+            onSynthesizeExperiment={loadExperimentSpec}
+          />
+
+          {/* Diagram-to-Lab Modal */}
+          <DiagramToLabModal
+            isOpen={isDiagramToLabOpen}
+            onClose={() => setIsDiagramToLabOpen(false)}
+            onSynthesizeExperiment={loadExperimentSpec}
           />
         </main>
       )}

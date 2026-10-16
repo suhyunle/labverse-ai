@@ -2,5 +2,7 @@
   "name": "Science Universe",
   "description": "AI-native interactive 3D science laboratory for exploratory simulation and learning",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

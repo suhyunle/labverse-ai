@@ -44,6 +44,27 @@ export const VariableControls: React.FC<VariableControlsProps> = ({
   }
 
   const getPresets = (): PresetItem[] => {
+    if (sceneType === 'gravity') {
+      return [
+        { label: '진공 자유 낙하 (Vacuum)', values: { airDensity: 0.0, gravity: 9.81, dropHeight: 30 } },
+        { label: '지구 대기 저항 (Air Drag)', values: { airDensity: 1.225, gravity: 9.81, dropHeight: 50 } },
+        { label: '달 표면 아폴로 낙하 (Moon)', values: { airDensity: 0.0, gravity: 1.62, dropHeight: 20 } },
+        { label: '목성 거대 중력 (Jupiter)', values: { airDensity: 1.3, gravity: 24.79, dropHeight: 50 } },
+      ];
+    }
+    if (sceneType === 'optics') {
+      return [
+        { label: '일반 굴절 (θ₁ = 30°)', values: { incidentAngle: 30 } },
+        { label: '임계각 근접 (θ₁ = 41°)', values: { incidentAngle: 41 } },
+        { label: '전반사 발생 (θ₁ = 60° TIR)', values: { incidentAngle: 60 } },
+      ];
+    }
+    if (sceneType === 'fluid') {
+      return [
+        { label: '완전 정적 성층화', values: { mixingEnergy: 0 } },
+        { label: '혼합 유화 에멀전', values: { mixingEnergy: 80 } },
+      ];
+    }
     if (sceneType === 'volcano') {
       return [
         { label: '휴면 상태 (Dormant)', values: { pressure: 20, gasContent: 15, ventResistance: 60 } },

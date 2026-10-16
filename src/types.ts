@@ -1,12 +1,23 @@
 export type ExperimentDomain =
+  | 'physics'
+  | 'optics'
+  | 'fluid_dynamics'
   | 'earth_science'
   | 'astronomy'
-  | 'physics'
   | 'chemistry'
   | 'biology'
   | 'general';
 
-export type SceneType = 'volcano' | 'solar_system' | 'buoyancy' | 'conceptual';
+export type SceneType =
+  | 'gravity'
+  | 'optics'
+  | 'fluid'
+  | 'volcano'
+  | 'solar_system'
+  | 'buoyancy'
+  | 'conceptual';
+
+export type LearningLevel = 'beginner' | 'intermediate' | 'advanced';
 
 export interface VariableSpec {
   id: string;
@@ -41,6 +52,40 @@ export interface GuidedStep {
   targetAction?: string;
 }
 
+export interface ResearchCitation {
+  title: string;
+  authors: string[];
+  year: number;
+  journalOrConference?: string;
+  doi?: string;
+  url?: string;
+  openAlexId?: string;
+  relevance: string;
+  verified: boolean;
+}
+
+export interface EvidenceItem {
+  id: string;
+  targetKey: string;
+  label: string;
+  formulaOrValue: string;
+  type: 'verified_constant' | 'established_law' | 'user_parameter' | 'model_assumption' | 'educational_approximation';
+  sourceName: string;
+  sourceUrl?: string;
+  description: string;
+  limitations?: string;
+}
+
+export interface VisualAnnotation {
+  id: string;
+  type: 'arrow' | 'callout' | 'highlight' | 'formula_badge';
+  label: string;
+  x: number; // percentage 0-100
+  y: number; // percentage 0-100
+  color?: string;
+  details?: string;
+}
+
 export interface ExperimentSpec {
   id: string;
   title: string;
@@ -56,6 +101,9 @@ export interface ExperimentSpec {
   explanation: string;
   guidedSteps: GuidedStep[];
   suggestedQueries: string[];
+  citations?: ResearchCitation[];
+  evidenceItems?: EvidenceItem[];
+  annotations?: VisualAnnotation[];
   isConceptualOnly?: boolean;
   limitations?: string;
 }
@@ -69,6 +117,28 @@ export interface ExperimentSnapshot {
   note?: string;
 }
 
+export interface HypothesisEvaluation {
+  id: string;
+  userHypothesis: string;
+  simulatedOutcomeSummary: string;
+  isConsistentWithPhysics: boolean;
+  aiExplanation: string;
+  misconceptionsIdentified: string[];
+  suggestedFollowUpExperiments: string[];
+  timestamp: number;
+}
+
+export interface ResearchTreeNode {
+  id: string;
+  parentId: string | null;
+  label: string;
+  sceneType: SceneType;
+  variables: Record<string, number>;
+  metrics: Record<string, number | string>;
+  hypothesis?: string;
+  timestamp: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -77,4 +147,5 @@ export interface ChatMessage {
   actionSummary?: string;
   variableUpdates?: Record<string, number>;
   followUpSuggestion?: string;
+  proposedVisualAnnotations?: VisualAnnotation[];
 }
