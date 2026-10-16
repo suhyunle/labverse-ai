@@ -21,6 +21,7 @@ interface LandingHeroProps {
   onOpenDiagramToLab: () => void;
   isLoading: boolean;
   loadingStep: string;
+  errorMessage?: string | null;
 }
 
 export const LandingHero: React.FC<LandingHeroProps> = ({
@@ -29,6 +30,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
   onOpenDiagramToLab,
   isLoading,
   loadingStep,
+  errorMessage,
 }) => {
   const [query, setQuery] = useState('');
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -295,9 +297,12 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
               <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
               <span>{loadingStep || 'AI 실험 아키텍트가 가상 연구실을 설계 중입니다...'}</span>
             </div>
-            <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-              <div className="bg-gradient-to-r from-cyan-400 to-indigo-500 h-full w-2/3 animate-pulse" />
-            </div>
+          </div>
+        )}
+
+        {errorMessage && !isLoading && (
+          <div className="w-full max-w-xl mx-auto p-3 mb-6 rounded-xl bg-red-950/40 border border-red-500/40 text-red-200 text-sm text-center">
+            {errorMessage}
           </div>
         )}
 

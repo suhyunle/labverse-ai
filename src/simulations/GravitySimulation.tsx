@@ -5,15 +5,13 @@ import { Play, Pause, RotateCcw, Wind, ShieldCheck } from 'lucide-react';
 import {
   analyticFall,
   bodyFromVariables,
-  FALL_BODY_PRESETS,
-  FallBody,
   FallSimulation,
-  GRAVITY_PLANET_PRESETS,
   paramsFromVariables,
   sampleAt,
   simulateFall,
 } from '../engines/gravity';
-import { VariableSpec } from '../types';
+import { UiComponent, VariableSpec } from '../types';
+import { DynamicControls, defaultUiFor } from '../components/DynamicControls';
 import { sound } from '../lib/audio';
 import { VerificationPanel } from '../components/VerificationPanel';
 import type { VerificationReport } from '../verification';
@@ -32,6 +30,8 @@ export interface GravityRunResult {
 
 interface GravitySimulationProps {
   variableSpecs: VariableSpec[];
+  uiComponents?: UiComponent[];
+  notice?: string | null;
   variables: Record<string, number>;
   verification?: VerificationReport | null;
   onChangeVariable: (id: string, value: number) => void;
@@ -163,26 +163,10 @@ const VelocityGraph: React.FC<{ simA: FallSimulation; simB: FallSimulation; time
   );
 };
 
-const SliderRow: React.FC<{ spec: VariableSpec; value: number; onChange: (v: number) => void }> = ({ spec, value, onChange }) => (
-  <label className="block">
-    <div className="flex items-center justify-between text-[11px] mb-0.5">
-      <span className="text-slate-300">{spec.label}</span>
-      <span className="font-mono text-cyan-300">{value} {spec.unit}</span>
-    </div>
-    <input
-      type="range"
-      min={spec.min}
-      max={spec.max}
-      step={spec.step}
-      value={value}
-      onChange={(e) => onChange(parseFloat(e.target.value))}
-      className="w-full accent-cyan-400 cursor-pointer"
-    />
-  </label>
-);
-
 export const GravitySimulation: React.FC<GravitySimulationProps> = ({
   variableSpecs,
+  uiComponents,
+  notice = null,
   variables,
   verification = null,
   onChangeVariable,
@@ -287,43 +271,6 @@ export const GravitySimulation: React.FC<GravitySimulationProps> = ({
   const radiusA = radiusFromArea(bodyA.areaM2);
   const radiusB = radiusFromArea(bodyB.areaM2);
   const isVacuum = params.airDensity === 0;
-  const specById = (id: string) => variableSpecs.find((s) => s.id === id);
-
-  const applyBodyPreset = (which: 'A' | 'B', presetId: string) => {
-    sound.playClick();
-    const b: FallBody = FALL_BODY_PRESETS[presetId].body;
-    onChangeVariable(`mass${which}`, b.massKg);
-    onChangeVariable(`area${which}`, b.areaM2);
-    onChangeVariable(`cd${which}`, b.dragCoefficient);
-  };
-
-  const sliderGroup = (ids: string[]) =>
-    ids.map((id) => {
-      const spec = specById(id);
-      if (!spec) return null;
-      return <SliderRow key={id} spec={spec} value={variables[id] ?? spec.default} onChange={(v) => onChangeVariable(id, v)} />;
-    });
-
-  const bodyBlock = (which: 'A' | 'B', color: string, title: string) => (
-    <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-bold" style={{ color }}>{title}</span>
-        <div className="flex gap-1">
-          {Object.entries(FALL_BODY_PRESETS).map(([id, p]) => (
-            <button
-              key={id}
-              onClick={() => applyBodyPreset(which, id)}
-              className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300 cursor-pointer"
-            >
-              {p.name}
-            </button>
-          ))}
-        </div>
-      </div>
-      {sliderGroup([`mass${which}`, `area${which}`, `cd${which}`])}
-    </div>
-  );
-
   const rowErr = (sim: number, theory: number) => (theory > 0 ? ((sim - theory) / theory) * 100 : 0);
 
   return (
@@ -402,37 +349,14 @@ export const GravitySimulation: React.FC<GravitySimulationProps> = ({
 
       {/* Side panel: never overlaps the chamber */}
       <aside className="lg:w-[380px] shrink-0 overflow-y-auto border-t lg:border-t-0 lg:border-l border-slate-800 bg-slate-950/90 p-3 space-y-3 text-xs">
+        {notice && <div className="p-2.5 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-[11px] leading-snug">{notice}</div>}
         <VerificationPanel report={verification} />
-        <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2">
-          <div className="font-bold text-slate-200">환경 조건</div>
-          <div className="flex flex-wrap gap-1">
-            {GRAVITY_PLANET_PRESETS.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => { sound.playClick(); onChangeVariable('gravity', p.g); }}
-                className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${Math.abs((variables.gravity ?? 9.81) - p.g) < 0.005 ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-              >
-                {p.name} {p.g}
-              </button>
-            ))}
-            <button
-              onClick={() => { sound.playClick(); onChangeVariable('airDensity', 0); }}
-              className="px-2 py-0.5 rounded text-[11px] bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
-            >
-              진공
-            </button>
-            <button
-              onClick={() => { sound.playClick(); onChangeVariable('airDensity', 1.2); }}
-              className="px-2 py-0.5 rounded text-[11px] bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
-            >
-              지구 대기 1.2
-            </button>
-          </div>
-          {sliderGroup(['dropHeight', 'gravity', 'airDensity'])}
-        </div>
-
-        {bodyBlock('A', COLOR_A, '물체 A')}
-        {bodyBlock('B', COLOR_B, '물체 B')}
+        <DynamicControls
+          components={uiComponents ?? defaultUiFor(variableSpecs)}
+          specs={variableSpecs}
+          values={variables}
+          onChange={onChangeVariable}
+        />
 
         <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5">
           <div className="font-bold text-slate-200">실시간 측정</div>

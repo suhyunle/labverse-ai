@@ -3,6 +3,8 @@ import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { buildGravityPresetSpec, normalizeGravitySpec, GRAVITY_VARIABLE_CATALOG } from './src/generation/gravitySpec';
+import { verifyExperimentSpec, ALLOWED_FORMULAS } from './src/verification';
 
 dotenv.config();
 
@@ -71,66 +73,7 @@ async function generateJson(
 
 // Predefined verified templates for instant high-speed fallback & seed matching
 const PRESET_EXPERIMENTS: Record<string, any> = {
-  gravity: {
-    id: 'exp-gravity-freefall',
-    title: '갈릴레오-뉴턴 자유 낙하 및 진공 가속도 실험실',
-    domain: 'physics',
-    sceneType: 'gravity',
-    learningObjectives: [
-      '진공 상태에서 모든 물체는 질량과 무관하게 동일한 중력 가속도 g로 낙하함을 증명',
-      '공기 저항 환경에서 단면적과 항력 계수에 따른 종단 속도(Terminal Velocity)의 형성 분석',
-      '행성별 중력(지구, 달, 화성, 목성)에 따른 낙하 시간 t = sqrt(2h/g)의 정량 비교',
-    ],
-    scientificPrinciples: [
-      {
-        name: '뉴턴 제2법칙 및 만유인력 등가 원리',
-        description: '중력 질량과 관성 질량의 등가성에 의해 중력장 내에서 물체의 가속도는 질량과 무관합니다.',
-        formula: 'm \\cdot a = G \\frac{M m}{r^2} \\implies a = g',
-      },
-      {
-        name: '진공 자유 낙하 운동 방정식',
-        description: '초기 속도가 0인 자유 낙하 시 낙하 거리와 낙하 시간의 관계식.',
-        formula: 'y(t) = h - \\frac{1}{2} g t^2, \\quad t_{fall} = \\sqrt{\\frac{2h}{g}}',
-      },
-      {
-        name: '난류 유체 공기 저항 및 종단 속도',
-        description: '물체의 속도가 증가하여 공기 저항력과 중력이 평형을 이룰 때 도달하는 최대 일정 속도.',
-        formula: 'v_t = \\sqrt{\\frac{2 m g}{\\rho C_d A}}',
-      },
-    ],
-    variables: [
-      { id: 'dropHeight', label: '낙하 높이', min: 1, max: 100, default: 30, step: 1, unit: 'm', description: '물체를 놓는 높이' },
-      { id: 'gravity', label: '중력 가속도', min: 0.1, max: 30, default: 9.81, step: 0.01, unit: 'm/s²', description: '달 1.62, 화성 3.71, 지구 9.81, 목성 24.79' },
-      { id: 'airDensity', label: '공기 밀도', min: 0, max: 1.5, default: 0, step: 0.05, unit: 'kg/m³', description: '0이면 진공, 지구 해수면은 약 1.2' },
-      { id: 'massA', label: '물체 A 질량', min: 0.001, max: 50, default: 6, step: 0.001, unit: 'kg', description: '물체 A의 질량' },
-      { id: 'areaA', label: '물체 A 단면적', min: 0.0005, max: 0.2, default: 0.0366, step: 0.0005, unit: 'm²', description: '낙하 방향에서 본 단면적' },
-      { id: 'cdA', label: '물체 A 항력계수', min: 0.04, max: 2, default: 0.47, step: 0.01, unit: '', description: '구는 약 0.47' },
-      { id: 'massB', label: '물체 B 질량', min: 0.001, max: 50, default: 0.005, step: 0.001, unit: 'kg', description: '물체 B의 질량' },
-      { id: 'areaB', label: '물체 B 단면적', min: 0.0005, max: 0.2, default: 0.0078, step: 0.0005, unit: 'm²', description: '낙하 방향에서 본 단면적' },
-      { id: 'cdB', label: '물체 B 항력계수', min: 0.04, max: 2, default: 1.3, step: 0.01, unit: '', description: '깃털 같은 납작한 물체는 1 이상' },
-    ],
-    observableOutputs: [
-      { id: 'fallTimeA', label: '물체 A 낙하 시간', unit: 's', description: '물체 A가 지면에 도달하는 데 걸린 시간' },
-      { id: 'fallTimeB', label: '물체 B 낙하 시간', unit: 's', description: '물체 B가 지면에 도달하는 데 걸린 시간' },
-      { id: 'impactVelocityA', label: '물체 A 충돌 속도', unit: 'm/s', formula: 'v = \\sqrt{2gh}', description: '지면 충돌 직전 종단/낙하 속도' },
-      { id: 'vacuumFallTime', label: '진공 이론 낙하 시간', unit: 's', formula: 't = \\sqrt{2h/g}', description: '공기 저항이 없을 때의 해석적 해' },
-    ],
-    formulas: ['t = sqrt(2h/g)', 'v = g t', 'v = sqrt(2gh)', 'F_d = 0.5 rho v^2 C_d A'],
-    simulationModel: 'deterministic_newtonian_kinematics_v2',
-    visualEffects: ['vacuum_chamber_hologram', 'force_vectors', 'kinematic_trails'],
-    safetyNotes: ['진공 체임버는 고압/감압 용기이므로 급격한 감압 시 안전 장치가 필요합니다.'],
-    explanation: '갈릴레오 갈릴레이는 1638년 "새로운 두 과학"에서 아리스토텔레스의 오랜 믿음(무거운 물체가 더 빨리 떨어진다)을 논파하고, 공기 저항이 없는 진공에서는 깃털과 쇠구슬이 동일한 속도로 낙하함을 이론과 실험으로 증명했습니다.',
-    guidedSteps: [
-      { stepNumber: 1, title: '진공 체임버 자유 낙하', instruction: '공기 밀도를 0.0(진공)으로 두고 깃털과 볼링공이 동시에 지면에 닿는지 확인하세요.', targetAction: 'airDensity == 0' },
-      { stepNumber: 2, title: '대기 저항 환경 도입', instruction: '공기 밀도를 1.2 kg/m³로 올려 깃털이 공기 저항으로 인해 천천히 떨어지는 종단 속도를 관찰하세요.', targetAction: 'airDensity > 1.0' },
-      { stepNumber: 3, title: '달 표면 중력 실험', instruction: '중력 가속도를 달(1.62 m/s²)로 낮춰 아폴로 15호 우주비행사가 실행했던 깃털-망치 낙하를 재현하세요.', targetAction: 'gravity < 2.0' },
-    ],
-    suggestedQueries: [
-      '진공 상태에서 공기 저항을 0으로 설정해줘',
-      '달 표면에서 깃털과 쇠구슬을 떨어뜨리면 어떻게 돼?',
-      '목성의 거대 중력에서 낙하 속도는 얼마나 빨라질까?',
-    ],
-  },
+  gravity: buildGravityPresetSpec(),
   optics: {
     id: 'exp-optics-snell',
     title: '스넬의 법칙 및 전반사 광학 실험실',
@@ -337,7 +280,7 @@ function generateFallbackExperiment(query: string) {
 }
 
 // 1. Plan Experiment API
-app.post('/api/plan-experiment', async (req: Request, res: Response) => {
+app.post('/api/plan-experiment-legacy', async (req: Request, res: Response) => {
   try {
     const { query } = req.body;
     if (!query || typeof query !== 'string') {
@@ -414,6 +357,114 @@ For volcano experiments:
   } catch (err: any) {
     console.error('Plan experiment error:', err);
     res.status(500).json({ error: 'Failed to plan experiment', details: err?.message });
+  }
+});
+
+// 1. Plan Experiment API (MVP: free-fall lab). Streams NDJSON progress events so the UI only ever
+// shows steps that really happen: generate -> verify -> (retry with real errors, max 2) -> done.
+const MAX_GENERATION_RETRIES = 2;
+
+function buildGravityPrompt(query: string, paper: any, previousErrors: string[]) {
+  const catalog = Object.entries(GRAVITY_VARIABLE_CATALOG)
+    .map(([id, v]) => `- ${id}: ${v.label}, unit "${v.unit}", allowed range ${v.min}..${v.max}, typical default ${v.default}`)
+    .join('\n');
+  const formulas = ALLOWED_FORMULAS.map((f) => `- ${f.variants[0]}`).join('\n');
+  const paperBlock = paper?.title
+    ? `\nThe lab illustrates this REAL paper (do not invent anything beyond this):\nTitle: ${paper.title}\nDOI: ${paper.doi ?? 'n/a'}\nResearch question: ${paper.researchQuestion ?? 'not stated'}\nHypothesis: ${paper.hypothesis ?? 'not stated'}\n`
+    : '';
+  const retryBlock = previousErrors.length
+    ? `\nYour previous output FAILED automatic verification with these exact errors. Fix every one:\n${previousErrors.map((e) => `- ${e}`).join('\n')}\n`
+    : '';
+  return `You design a free-fall physics lab for LabVerse AI. Reply with compact JSON only (no prose).
+
+Engine variables you may expose (use these exact ids; stay inside the allowed range):
+${catalog}
+
+Allowed formulas (copy them exactly; no others):
+${formulas}
+
+Rules:
+- Always include dropHeight, gravity and airDensity. Add only the body variables (massA/areaA/cdA/massB/areaB/cdB) the lab needs.
+- min < max and min <= default <= max. Units exactly as listed.
+- observables: [{ "id", "label", "unit" }] with ids from fallTimeA, fallTimeB, impactVelocityA, impactVelocityB, vacuumFallTime; unit "s" for times and "m/s" for speeds.
+- uiComponents: a tree of { "type": "group", "title", "children": [...] }, { "type": "slider", "variableId" } and { "type": "preset_buttons", "options": [{ "label", "values": { "<variableId>": number } }] }. Every variableId must be in variables and every preset value inside that variable's min..max.
+- All human-readable text in natural Korean. Keep it short: 2-3 learningObjectives, 2-3 guidedSteps.
+- If the request is NOT about free fall / gravity / falling bodies / air drag, reply exactly {"unsupported": true, "reason": "<Korean one-liner>"}.
+${paperBlock}${retryBlock}
+User request: "${query}"
+
+JSON shape:
+{ "title": string, "learningObjectives": [string], "variables": [{ "id", "label", "min", "max", "default", "step", "unit", "description" }], "observables": [{ "id", "label", "unit" }], "formulas": [string], "uiComponents": [...], "explanation": string, "guidedSteps": [{ "title", "instruction" }], "limitations": string }`;
+}
+
+app.post('/api/plan-experiment', async (req: Request, res: Response) => {
+  const { query, paperContext } = req.body || {};
+  if (!query || typeof query !== 'string') {
+    res.status(400).json({ error: 'Valid scientific query is required' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+  const emit = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + '\n');
+  const started = Date.now();
+
+  try {
+    const preset = () => {
+      const spec = PRESET_EXPERIMENTS.gravity;
+      return { spec, report: verifyExperimentSpec(spec) };
+    };
+
+    if (!apiKey) {
+      const { spec, report } = preset();
+      emit({ type: 'step', step: 'verify' });
+      emit({ type: 'done', experiment: spec, verification: report, source: 'preset', notice: 'GEMINI_API_KEY가 없어 AI 생성 없이 기본 자유 낙하 실험을 불러왔습니다.', attempts: 0, ms: Date.now() - started });
+      res.end();
+      return;
+    }
+
+    let errors: string[] = [];
+    let lastReport: ReturnType<typeof verifyExperimentSpec> | null = null;
+    for (let attempt = 0; attempt <= MAX_GENERATION_RETRIES; attempt++) {
+      emit({ type: 'step', step: 'generate', attempt: attempt + 1, maxAttempts: MAX_GENERATION_RETRIES + 1 });
+      let raw: any;
+      let model: string;
+      try {
+        ({ data: raw, model } = await generateJson(buildGravityPrompt(query.trim().slice(0, 500), paperContext, errors)));
+      } catch (err: any) {
+        const { spec, report } = preset();
+        emit({ type: 'done', experiment: spec, verification: report, source: 'preset', notice: `AI 생성에 실패해 기본 자유 낙하 실험을 불러왔습니다 (${err?.message || '알 수 없는 오류'}).`, attempts: attempt + 1, ms: Date.now() - started });
+        res.end();
+        return;
+      }
+
+      if (raw?.unsupported) {
+        emit({ type: 'error', code: 'unsupported', message: `현재 버전은 자유 낙하 실험만 지원합니다. ${typeof raw.reason === 'string' ? raw.reason : ''}`.trim() });
+        res.end();
+        return;
+      }
+
+      emit({ type: 'step', step: 'verify', attempt: attempt + 1, model });
+      const spec = normalizeGravitySpec(raw);
+      const report = verifyExperimentSpec(spec);
+      lastReport = report;
+      if (report.passed) {
+        emit({ type: 'done', experiment: spec, verification: report, source: 'ai', model, attempts: attempt + 1, ms: Date.now() - started });
+        res.end();
+        return;
+      }
+      errors = report.errors;
+      if (attempt < MAX_GENERATION_RETRIES) emit({ type: 'retry', attempt: attempt + 1, errors });
+    }
+
+    const { spec, report } = preset();
+    emit({ type: 'done', experiment: spec, verification: report, source: 'preset', notice: `AI가 ${MAX_GENERATION_RETRIES + 1}회 시도했지만 검증을 통과하지 못해 기본 자유 낙하 실험을 불러왔습니다. 마지막 오류: ${(lastReport?.errors ?? []).slice(0, 3).join(' / ')}`, attempts: MAX_GENERATION_RETRIES + 1, ms: Date.now() - started });
+    res.end();
+  } catch (err: any) {
+    console.error('Plan experiment error:', err);
+    emit({ type: 'error', code: 'internal', message: err?.message || '실험 생성 중 오류가 발생했습니다.' });
+    res.end();
   }
 });
 

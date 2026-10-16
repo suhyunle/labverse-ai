@@ -1,4 +1,4 @@
-import type { ExperimentSpec } from '../types';
+import type { ExperimentSpec, UiComponent } from '../types';
 import { analyticFall, bodyFromVariables, paramsFromVariables, simulateFall } from '../engines/gravity';
 import { matchAllowedFormula, ALLOWED_FORMULAS } from './formulas';
 import type { CheckResult, VerificationReport } from './types';
@@ -75,6 +75,26 @@ export function checkSchema(spec: unknown): CheckResult {
     });
   }
   if (!Array.isArray(s.formulas) || s.formulas.some((f) => typeof f !== 'string')) errors.push('formulas는 문자열 배열이어야 합니다');
+  if (s.uiComponents !== undefined) {
+    if (!Array.isArray(s.uiComponents)) errors.push('uiComponents는 배열이어야 합니다');
+    else if (Array.isArray(s.variables)) {
+      const byId = new Map<string, { min: number; max: number }>();
+      for (const x of s.variables) if (x && isStr(x.id)) byId.set(x.id, { min: x.min, max: x.max });
+      const walk = (list: UiComponent[], path: string) => list.forEach((c, i) => {
+        const p = `${path}[${i}]`;
+        if (c.type === 'group') walk(c.children, `${p}.children`);
+        else if (c.type === 'slider') { if (!byId.has(c.variableId)) errors.push(`uiComponents${p}: 존재하지 않는 변수 ${c.variableId}`); }
+        else if (c.type === 'preset_buttons') {
+          c.options.forEach((o) => Object.entries(o.values).forEach(([id, val]) => {
+            const r = byId.get(id);
+            if (!r) errors.push(`프리셋 '${o.label}': 존재하지 않는 변수 ${id}`);
+            else if (val < r.min || val > r.max) errors.push(`프리셋 '${o.label}': ${id}=${val}이 범위 [${r.min}, ${r.max}] 밖입니다`);
+          }));
+        } else errors.push(`uiComponents${p}: 알 수 없는 type`);
+      });
+      walk(s.uiComponents, '');
+    }
+  }
   return result('schema', '스키마 필드·타입', '필수 필드와 타입이 모두 올바릅니다', errors);
 }
 

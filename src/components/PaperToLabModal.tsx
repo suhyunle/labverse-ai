@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { FileText, Search, ExternalLink, Sparkles, CheckCircle2, AlertTriangle, ArrowRight, X } from 'lucide-react';
 import { ExperimentSpec } from '../types';
 import { sound } from '../lib/audio';
+import { planExperiment, describePlanEvent } from '../lib/planExperiment';
 
 interface PaperToLabModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSynthesizeExperiment: (exp: ExperimentSpec) => void;
+  onSynthesizeExperiment: (exp: ExperimentSpec, notice?: string) => void;
 }
 
 export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
@@ -20,6 +21,7 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
   const [candidates, setCandidates] = useState<any[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [launchStep, setLaunchStep] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -61,11 +63,37 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
     }
   };
 
-  const handleLaunch = () => {
-    if (!paperResult?.experimentSpec) return;
-    sound.playEureka();
-    onSynthesizeExperiment(paperResult.experimentSpec);
-    onClose();
+  const handleLaunch = async () => {
+    if (!paperResult?.experimentSpec || launchStep) return;
+    sound.playClick();
+    setErrorMsg(null);
+    setLaunchStep('AI 실험 생성 요청 중...');
+    try {
+      const ex = paperResult.extraction;
+      const result = await planExperiment(
+        {
+          query: `${paperResult.paperMetadata.title}`,
+          paperContext: {
+            title: paperResult.paperMetadata.title,
+            doi: paperResult.paperMetadata.doi,
+            researchQuestion: ex?.researchQuestion ?? null,
+            hypothesis: ex?.hypothesis ?? null,
+          },
+        },
+        (e) => {
+          const text = describePlanEvent(e);
+          if (text) setLaunchStep(text);
+        },
+      );
+      setLaunchStep('실험실을 렌더링하는 중');
+      sound.playEureka();
+      onSynthesizeExperiment(result.experiment, result.notice);
+      onClose();
+    } catch (err: any) {
+      setErrorMsg(err?.message || '실험실 생성에 실패했습니다.');
+    } finally {
+      setLaunchStep(null);
+    }
   };
 
   return (
@@ -274,10 +302,10 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
               {/* Launch CTA */}
               <button
                 onClick={handleLaunch}
-                disabled={!paperResult.experimentSpec}
+                disabled={!paperResult.experimentSpec || !!launchStep}
                 className="w-full py-2.5 disabled:opacity-40 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-bold flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-cyan-500/25"
               >
-                <span>이 논문 기반 3D 인터랙티브 실험실 진입</span>
+                <span>{launchStep ?? '이 논문 기반 자유 낙하 실험실 생성'}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>

@@ -24,6 +24,7 @@ import { ConceptualSimulation } from './simulations/ConceptualSimulation';
 import { ExperimentSpec, ExperimentSnapshot, ResearchTreeNode, LearningLevel } from './types';
 import { sound } from './lib/audio';
 import { verifyExperimentSpec } from './verification';
+import { planExperiment, describePlanEvent } from './lib/planExperiment';
 
 export default function App() {
   const [currentExperiment, setCurrentExperiment] = useState<ExperimentSpec | null>(null);
@@ -35,6 +36,8 @@ export default function App() {
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadingStep, setLoadingStep] = useState<string>('');
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [labNotice, setLabNotice] = useState<string | null>(null);
   const [learningLevel, setLearningLevel] = useState<LearningLevel>('intermediate');
 
   // Modals state
@@ -115,41 +118,29 @@ export default function App() {
     sound.setMuted(next);
   };
 
-  // Plan or synthesize experiment
+  // Plan an experiment: the server streams real progress (generate -> verify -> retry).
   const handlePlanExperiment = async (query: string) => {
     setIsLoading(true);
-    setLoadingStep('1. 질문 의도 및 물리 법칙 해석 중...');
-
-    const timer1 = setTimeout(() => {
-      setLoadingStep('2. 3D 실험 환경 모델 및 조작 변인 산출 중...');
-    }, 600);
-
-    const timer2 = setTimeout(() => {
-      setLoadingStep('3. 렌더링 파이프라인 및 인터랙티브 셰이더 구축 중...');
-    }, 1200);
-
+    setPlanError(null);
+    setLoadingStep('요청을 서버로 보내는 중...');
     try {
-      const res = await fetch('/api/plan-experiment', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
+      const result = await planExperiment({ query }, (e) => {
+        const text = describePlanEvent(e);
+        if (text) setLoadingStep(text);
       });
-
-      const data = await res.json();
-      if (!data.experiment) throw new Error('Invalid experiment specification');
-
-      loadExperimentSpec(data.experiment);
-    } catch (err) {
+      setLoadingStep('실험실을 렌더링하는 중');
+      loadExperimentSpec(result.experiment, result.notice);
+    } catch (err: any) {
       console.error('Experiment planning error:', err);
+      setPlanError(err?.message || '실험 생성에 실패했습니다.');
     } finally {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
       setIsLoading(false);
       setLoadingStep('');
     }
   };
 
-  const loadExperimentSpec = (exp: ExperimentSpec) => {
+  const loadExperimentSpec = (exp: ExperimentSpec, notice?: string) => {
+    setLabNotice(notice ?? null);
     const initialVars: Record<string, number> = {};
     exp.variables.forEach((v) => {
       initialVars[v.id] = v.default;
@@ -288,6 +279,7 @@ export default function App() {
           onOpenDiagramToLab={() => setIsDiagramToLabOpen(true)}
           isLoading={isLoading}
           loadingStep={loadingStep}
+          errorMessage={planError}
         />
       ) : (
         <main className="relative w-full h-full pt-14">
@@ -296,6 +288,8 @@ export default function App() {
             {currentExperiment.sceneType === 'gravity' && (
               <GravitySimulation
                 variableSpecs={currentExperiment.variables}
+                uiComponents={currentExperiment.uiComponents}
+                notice={labNotice}
                 variables={variables}
                 verification={verification}
                 onChangeVariable={handleChangeVariable}
@@ -439,21 +433,20 @@ export default function App() {
             onSelectNode={handleSelectTreeNode}
           />
 
-          {/* Paper-to-Lab Modal */}
-          <PaperToLabModal
-            isOpen={isPaperToLabOpen}
-            onClose={() => setIsPaperToLabOpen(false)}
-            onSynthesizeExperiment={loadExperimentSpec}
-          />
-
-          {/* Diagram-to-Lab Modal */}
-          <DiagramToLabModal
-            isOpen={isDiagramToLabOpen}
-            onClose={() => setIsDiagramToLabOpen(false)}
-            onSynthesizeExperiment={loadExperimentSpec}
-          />
         </main>
       )}
+
+      {/* Modals usable from the landing screen as well */}
+      <PaperToLabModal
+        isOpen={isPaperToLabOpen}
+        onClose={() => setIsPaperToLabOpen(false)}
+        onSynthesizeExperiment={loadExperimentSpec}
+      />
+      <DiagramToLabModal
+        isOpen={isDiagramToLabOpen}
+        onClose={() => setIsDiagramToLabOpen(false)}
+        onSynthesizeExperiment={loadExperimentSpec}
+      />
     </div>
   );
 }

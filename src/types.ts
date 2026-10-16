@@ -86,6 +86,15 @@ export interface VisualAnnotation {
   details?: string;
 }
 
+/**
+ * Declarative control layout. The lab renders its controls from this tree, so an AI-generated
+ * spec decides which sliders and preset buttons exist and how they are grouped.
+ */
+export type UiComponent =
+  | { type: 'group'; title: string; children: UiComponent[] }
+  | { type: 'slider'; variableId: string }
+  | { type: 'preset_buttons'; label?: string; options: { label: string; values: Record<string, number> }[] };
+
 export interface ExperimentSpec {
   id: string;
   title: string;
@@ -97,6 +106,8 @@ export interface ExperimentSpec {
   observableOutputs: ObservableOutput[];
   /** Computational formulas (plain text or LaTeX); each must be on the verification allow-list. */
   formulas?: string[];
+  /** Control layout; when absent the lab falls back to one slider per variable. */
+  uiComponents?: UiComponent[];
   simulationModel: string;
   visualEffects: string[];
   safetyNotes: string[];

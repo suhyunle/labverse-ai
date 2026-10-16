@@ -1,5 +1,6 @@
 import { verifyExperimentSpec, checkSchema, checkRanges, checkUnits, checkFormulas, checkEngine, validateVariableUpdates, matchAllowedFormula, normalizeUnit } from '../src/verification/index.ts';
 import type { ExperimentSpec } from '../src/types.ts';
+import { buildGravityPresetSpec, normalizeGravitySpec } from '../src/generation/gravitySpec.ts';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -111,6 +112,38 @@ console.log('\n[all] verifyExperimentSpec + validateVariableUpdates');
   assert(ok.ok && ok.accepted.gravity === 1.62, 'in-range update is accepted');
   const rejected = validateVariableUpdates(goodSpec(), { gravity: 99, nonsense: 1, dropHeight: '30' as unknown as number });
   assert(!rejected.ok && rejected.errors.length === 3 && Object.keys(rejected.accepted).length === 0, 'out-of-range, unknown and non-numeric updates are rejected');
+}
+
+console.log('\n[gen] preset + AI spec normalisation');
+{
+  const preset = verifyExperimentSpec(buildGravityPresetSpec());
+  assert(preset.passed, `built-in preset passes all five checks (${preset.errors.join('|') || 'ok'})`);
+
+  const raw = {
+    title: '달 낙하',
+    variables: [
+      { id: 'dropHeight', label: '높이', min: 5, max: 50, default: 20, step: 1, unit: 'm' },
+      { id: 'gravity', label: '중력', min: 1, max: 25, default: 1.62, step: 0.01, unit: 'm/s²' },
+      { id: 'airDensity', label: '공기 밀도', min: 0, max: 1.3, default: 0, step: 0.05, unit: 'kg/m³' },
+    ],
+    observables: [{ id: 'fallTimeA', label: '낙하 시간', unit: 's' }],
+    formulas: ['t = sqrt(2h/g)', 'v = sqrt(2gh)'],
+    uiComponents: [{ type: 'group', title: '조건', children: [{ type: 'slider', variableId: 'gravity' }, { type: 'preset_buttons', options: [{ label: '달', values: { gravity: 1.62 } }] }] }],
+  };
+  const ai = normalizeGravitySpec(raw, 1);
+  const ok = verifyExperimentSpec(ai);
+  assert(ok.passed, `compact AI spec expands and passes verification (${ok.errors.join('|') || 'ok'})`);
+  assert(ai.uiComponents?.length === 1 && ai.variables.length === 3, 'AI-chosen controls are preserved (dynamic UI)');
+
+  const badG = normalizeGravitySpec({ ...raw, variables: [{ ...raw.variables[0] }, { ...raw.variables[1], max: 90 }, raw.variables[2]] }, 2);
+  assert(!verifyExperimentSpec(badG).passed, 'AI spec with g up to 90 m/s² is rejected');
+  const badF = normalizeGravitySpec({ ...raw, formulas: ['E = mc^2'] }, 3);
+  assert(verifyExperimentSpec(badF).errors.some((e) => e.includes('E = mc^2')), 'AI spec with an unlisted formula reports that formula');
+  const badUi = normalizeGravitySpec({ ...raw, uiComponents: [{ type: 'slider', variableId: 'nope' }, { type: 'preset_buttons', options: [{ label: 'x', values: { gravity: 99 } }] }] }, 4);
+  const badUiErrors = verifyExperimentSpec(badUi).errors;
+  assert(badUiErrors.some((e) => e.includes('nope')) && badUiErrors.some((e) => e.includes('99')), 'UI referencing unknown variables / out-of-range presets is rejected');
+  const missing = normalizeGravitySpec({ ...raw, variables: [raw.variables[0]] }, 5);
+  assert(!verifyExperimentSpec(missing).passed, 'AI spec missing gravity/airDensity is rejected');
 }
 
 console.log('\n🎉 ALL VERIFICATION TESTS PASSED\n');
