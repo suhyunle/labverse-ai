@@ -39,7 +39,7 @@ export const ResearchTree: React.FC<ResearchTreeProps> = ({
     const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(nodes, null, 2));
     const dlAnchorElem = document.createElement('a');
     dlAnchorElem.setAttribute('href', dataStr);
-    dlAnchorElem.setAttribute('download', `genesis_lab_research_log_${Date.now()}.json`);
+    dlAnchorElem.setAttribute('download', `labverse_research_log_${Date.now()}.json`);
     dlAnchorElem.click();
   };
 

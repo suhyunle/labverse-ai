@@ -17,6 +17,8 @@ import { VerificationPanel } from '../components/VerificationPanel';
 import type { VerificationReport } from '../verification';
 
 export interface GravityRunResult {
+  /** Unique per finished run; consumers use it to react exactly once. */
+  runId: number;
   variables: Record<string, number>;
   bodies: {
     label: 'A' | 'B';
@@ -32,6 +34,8 @@ interface GravitySimulationProps {
   variableSpecs: VariableSpec[];
   uiComponents?: UiComponent[];
   notice?: string | null;
+  /** Rendered inside the side panel so it can never cover the 3D chamber. */
+  novaSlot?: React.ReactNode;
   variables: Record<string, number>;
   verification?: VerificationReport | null;
   onChangeVariable: (id: string, value: number) => void;
@@ -167,6 +171,7 @@ export const GravitySimulation: React.FC<GravitySimulationProps> = ({
   variableSpecs,
   uiComponents,
   notice = null,
+  novaSlot = null,
   variables,
   verification = null,
   onChangeVariable,
@@ -244,6 +249,7 @@ export const GravitySimulation: React.FC<GravitySimulationProps> = ({
           completedRef.current = true;
           sound.playRumble(0.4);
           onRunCompleteRef.current?.({
+            runId: Date.now(),
             variables: { ...variablesRef.current },
             bodies: [
               { label: 'A', simLandingTime: simA.landingTime, theoryLandingTime: theoryA.landingTime, impactVelocity: simA.impactVelocity, terminalVelocity: Number.isFinite(simA.terminalVelocity) ? simA.terminalVelocity : null },
@@ -276,7 +282,7 @@ export const GravitySimulation: React.FC<GravitySimulationProps> = ({
   return (
     <div className="absolute inset-0 flex flex-col lg:flex-row bg-slate-950 text-white">
       {/* 3D chamber + playback */}
-      <div className="flex flex-col min-h-0 h-[55%] lg:h-full lg:flex-1">
+      <div className="flex flex-col min-h-0 h-[58%] shrink-0 lg:h-full lg:shrink lg:flex-1">
         <div className="flex items-center justify-between px-4 pt-3 pb-2 text-xs">
           <div>
             <div className="font-bold text-sm">자유 낙하 실험 챔버</div>
@@ -348,9 +354,10 @@ export const GravitySimulation: React.FC<GravitySimulationProps> = ({
       </div>
 
       {/* Side panel: never overlaps the chamber */}
-      <aside className="lg:w-[380px] shrink-0 overflow-y-auto border-t lg:border-t-0 lg:border-l border-slate-800 bg-slate-950/90 p-3 space-y-3 text-xs">
+      <aside className="flex-1 min-h-0 lg:flex-none lg:w-[380px] overflow-y-auto border-t lg:border-t-0 lg:border-l border-slate-800 bg-slate-950/90 p-3 space-y-3 text-xs">
         {notice && <div className="p-2.5 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-[11px] leading-snug">{notice}</div>}
         <VerificationPanel report={verification} />
+        {novaSlot}
         <DynamicControls
           components={uiComponents ?? defaultUiFor(variableSpecs)}
           specs={variableSpecs}

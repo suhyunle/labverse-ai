@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FileText, Search, ExternalLink, Sparkles, CheckCircle2, AlertTriangle, ArrowRight, X } from 'lucide-react';
 import { ExperimentSpec } from '../types';
 import { sound } from '../lib/audio';
@@ -6,12 +6,15 @@ import { planExperiment, describePlanEvent } from '../lib/planExperiment';
 
 interface PaperToLabModalProps {
   isOpen: boolean;
+  /** When set (e.g. a demo DOI) the modal runs this lookup as soon as it opens. */
+  initialQuery?: string;
   onClose: () => void;
   onSynthesizeExperiment: (exp: ExperimentSpec, notice?: string) => void;
 }
 
 export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
   isOpen,
+  initialQuery = '',
   onClose,
   onSynthesizeExperiment,
 }) => {
@@ -22,6 +25,14 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [launchStep, setLaunchStep] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen && initialQuery) {
+      setQuery(initialQuery);
+      handleSearchPaper(initialQuery);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, initialQuery]);
 
   if (!isOpen) return null;
 

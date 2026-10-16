@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { ExperimentSpec, LearningLevel } from '../types';
 import { sound } from '../lib/audio';
+import { FEATURES, APP_NAME } from '../config/features';
 
 interface HeaderProps {
   currentExperiment: ExperimentSpec | null;
@@ -50,9 +51,9 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleMute,
 }) => {
   return (
-    <header className="fixed top-0 left-0 right-0 z-40 h-14 bg-slate-950/80 backdrop-blur-xl border-b border-cyan-500/20 px-3 md:px-5 flex items-center justify-between text-white transition-all select-none">
+    <header className="fixed top-0 left-0 right-0 z-40 h-14 bg-slate-950/80 backdrop-blur-xl border-b border-cyan-500/20 px-3 md:px-5 flex items-center justify-between gap-2 overflow-hidden text-white transition-all select-none">
       {/* Brand & Active Experiment Title */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 min-w-0">
         <button
           onClick={onNewExperiment}
           className="flex items-center gap-2.5 group cursor-pointer text-left"
@@ -64,14 +65,11 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
           <div>
-            <div className="text-xs font-black tracking-widest text-cyan-400 font-mono flex items-center gap-1.5">
-              <span>GENESIS LAB 3.0</span>
-              <span className="text-[10px] px-1 py-0.2 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-normal">
-                AI UNIVERSE
-              </span>
+            <div className="text-sm font-black tracking-wide text-cyan-400 whitespace-nowrap">
+              <span>{APP_NAME}</span>
             </div>
-            <div className="text-[11px] text-slate-400 font-medium truncate max-w-[160px] sm:max-w-[260px]">
-              {currentExperiment ? currentExperiment.title : 'AI 과학 연구 플랫폼'}
+            <div className="text-[11px] text-slate-400 font-medium truncate max-w-[140px] sm:max-w-[220px] lg:max-w-[320px]">
+              {currentExperiment ? currentExperiment.title : '논문에서 실험으로'}
             </div>
           </div>
         </button>
@@ -82,19 +80,20 @@ export const Header: React.FC<HeaderProps> = ({
             sound.playClick();
             onOpenPaperToLab();
           }}
-          className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-500/40 text-indigo-300 text-xs font-medium transition cursor-pointer"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-500/40 text-indigo-300 text-xs font-medium transition cursor-pointer"
           title="연구 논문(DOI/URL)을 인터랙티브 실험실로 변환"
         >
           <FileText className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Paper-to-Lab</span>
+          <span className="hidden sm:inline">Paper-to-Lab</span>
         </button>
       </div>
 
       {/* Center/Right Action Toolbar */}
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
         {currentExperiment && (
           <>
             {/* Parallel Universe Split Mode */}
+            {FEATURES.parallelUniverse && (
             <button
               onClick={() => {
                 sound.playClick();
@@ -105,9 +104,10 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Split className="w-3.5 h-3.5 text-cyan-400" />
               <span className="hidden lg:inline">평행 우주 (Split)</span>
-            </button>
+            </button>)}
 
             {/* Hypothesis Arena */}
+            {FEATURES.hypothesisArena && (
             <button
               onClick={() => {
                 sound.playClick();
@@ -118,9 +118,10 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Target className="w-3.5 h-3.5 text-amber-400" />
               <span className="hidden lg:inline">가설 아레나</span>
-            </button>
+            </button>)}
 
             {/* Evidence Lens */}
+            {FEATURES.evidenceLens && (
             <button
               onClick={() => {
                 sound.playClick();
@@ -131,9 +132,10 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               <span className="hidden xl:inline">에비던스 렌즈</span>
-            </button>
+            </button>)}
 
             {/* Research Tree */}
+            {FEATURES.researchTree && (
             <button
               onClick={() => {
                 sound.playClick();
@@ -144,7 +146,7 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <GitBranch className="w-3.5 h-3.5 text-purple-400" />
               <span className="hidden xl:inline">연구 트리</span>
-            </button>
+            </button>)}
 
             {/* Reset */}
             <button
@@ -156,6 +158,7 @@ export const Header: React.FC<HeaderProps> = ({
               title="변수 기본값 리셋"
             >
               <RotateCcw className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline ml-1">초기화</span>
             </button>
           </>
         )}

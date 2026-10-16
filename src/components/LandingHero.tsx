@@ -14,10 +14,13 @@ import {
   Droplet,
 } from 'lucide-react';
 import { sound } from '../lib/audio';
+import { FEATURES, APP_NAME, APP_TAGLINE } from '../config/features';
 
 interface LandingHeroProps {
   onSearch: (query: string) => void;
-  onOpenPaperToLab: () => void;
+  onOpenPaperToLab: (doi?: string) => void;
+  /** Loads the built-in verified free-fall lab instantly (no API call). */
+  onQuickStart: (overrides?: Record<string, number>) => void;
   onOpenDiagramToLab: () => void;
   isLoading: boolean;
   loadingStep: string;
@@ -27,6 +30,7 @@ interface LandingHeroProps {
 export const LandingHero: React.FC<LandingHeroProps> = ({
   onSearch,
   onOpenPaperToLab,
+  onQuickStart,
   onOpenDiagramToLab,
   isLoading,
   loadingStep,
@@ -150,55 +154,33 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
     onSearch(suggestion);
   };
 
-  const sampleSuggestions = [
-    { label: '⚖️ 진공에서 깃털과 쇠구슬의 자유 낙하', query: '진공에서 깃털과 쇠구슬의 자유 낙하 운동' },
-    { label: '🌈 스넬의 법칙과 전반사 임계각', query: '스넬의 법칙과 전반사 임계각 광학 실험' },
-    { label: '🧪 물과 기름, 꿀의 비혼화성 밀도 기둥', query: '비혼화성 유체 성층화 및 밀도 기둥' },
-    { label: '🌋 화산은 왜 폭발할까? (마그마 압력)', query: '화산은 왜 폭발할까?' },
-    { label: '🪐 태양계에서 지구와 달의 궤도 운동', query: '태양계에서 지구와 달의 움직임을 보고 싶어' },
+  const DEMO_DOI = '10.1088/1361-6552/aa65da';
+
+  // Chips never call the AI: the first two open the built-in verified lab immediately.
+  const sampleSuggestions: { label: string; run: () => void }[] = [
+    { label: '⚖️ 진공에서 깃털과 볼링공', run: () => onQuickStart() },
+    { label: '🌬️ 공기저항이 있으면 무거운 공이 먼저 떨어질까?', run: () => onQuickStart({ airDensity: 1.2 }) },
+    { label: '📄 논문으로 시작: Ferreira et al. (2017)', run: () => onOpenPaperToLab(DEMO_DOI) },
   ];
 
   const featuredCards = [
     {
       title: '갈릴레오-뉴턴 자유 낙하 실험실',
-      desc: '진공 체임버와 공기 저항 환경에서 깃털, 볼링공, 금 구체의 종단 속도와 등가속도 운동 법칙을 검증합니다.',
+      desc: '진공과 공기 저항 환경에서 깃털, 볼링공의 낙하를 비교하고 종단 속도와 등가속도 운동을 검증합니다.',
       icon: Scale,
       color: 'from-cyan-500 to-blue-600',
-      tag: '결정론적 역학 · NEWTONIAN',
+      tag: '결정론적 역학',
       query: '진공에서 깃털과 볼링공의 자유 낙하',
+      instant: true,
     },
-    {
-      title: '스넬의 법칙 & 전반사 광학 벤치',
-      desc: '입사각과 매질 굴절률을 조절하며 페르마의 원리, 굴절각, 임계각 초과 시의 100% 전반사(TIR)를 관측합니다.',
-      icon: Sun,
-      color: 'from-indigo-500 to-purple-600',
-      tag: '기하 광학 · SNELL & FRESNEL',
-      query: '스넬의 법칙과 전반사 임계각',
-    },
-    {
-      title: '비혼화성 유체 밀도 기둥 실험실',
-      desc: '수은, 꿀, 물, 기름, 알코올의 계면장력과 밀도 차이에 의한 자연 성층화 및 교반 후 분리 이완을 분석합니다.',
-      icon: Droplet,
-      color: 'from-amber-500 to-orange-600',
-      tag: '유체 정역학 · STRATIFICATION',
-      query: '비혼화성 유체 성층화 및 밀도 기둥',
-    },
-    {
-      title: '화산 마그마 열역학 실험실',
-      desc: '지하 마그마 방 압력, 휘발성 가스 함량, 화도 저항을 조절하여 플리니식 대폭발과 30km 분연주를 유도합니다.',
-      icon: Flame,
-      color: 'from-rose-500 to-red-600',
-      tag: '지구물리학 · THERMODYNAMICS',
-      query: '화산은 왜 폭발할까?',
-    },
-    {
-      title: '태양계 천체 궤도 실험실',
-      desc: '케플러 제3법칙과 만유인력에 기반하여 중력 상수, 지구 공전 속도, 달 거리를 조절하며 기조력을 탐구합니다.',
-      icon: Globe,
-      color: 'from-blue-500 to-cyan-500',
-      tag: '천문학 · KEPLERIAN NBODY',
-      query: '태양계에서 지구와 달의 움직임',
-    },
+    ...(FEATURES.otherLabs
+      ? [
+          { title: '스넬의 법칙 & 전반사 광학 벤치', desc: '입사각과 매질 굴절률을 조절하며 굴절각, 임계각 초과 시의 전반사를 관측합니다.', icon: Sun, color: 'from-indigo-500 to-purple-600', tag: '기하 광학', query: '스넬의 법칙과 전반사 임계각', instant: false },
+          { title: '비혼화성 유체 밀도 기둥 실험실', desc: '밀도 차이에 의한 자연 성층화와 교반 후 분리를 분석합니다.', icon: Droplet, color: 'from-amber-500 to-orange-600', tag: '유체 정역학', query: '비혼화성 유체 성층화 및 밀도 기둥', instant: false },
+          { title: '화산 마그마 열역학 실험실', desc: '마그마 방 압력과 가스 함량을 조절해 분화를 유도합니다.', icon: Flame, color: 'from-rose-500 to-red-600', tag: '지구물리학', query: '화산은 왜 폭발할까?', instant: false },
+          { title: '태양계 천체 궤도 실험실', desc: '중력 상수와 공전 속도를 조절하며 기조력을 탐구합니다.', icon: Globe, color: 'from-blue-500 to-cyan-500', tag: '천문학', query: '태양계에서 지구와 달의 움직임', instant: false },
+        ]
+      : []),
   ];
 
   return (
@@ -217,22 +199,21 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
         {/* Top Tag */}
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/80 border border-cyan-500/30 text-cyan-300 text-xs font-mono mb-5 backdrop-blur-md shadow-lg shadow-cyan-950/40">
           <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-          <span>GENESIS LAB 3.0 · ADVANCED AI SCIENTIFIC UNIVERSE</span>
+          <span>{APP_NAME} · {APP_TAGLINE}</span>
         </div>
 
         {/* Vision Title */}
-        <h1 className="text-3xl sm:text-5xl md:text-6xl font-extrabold tracking-tight mb-3 leading-tight">
-          과학적 호기심과 연구 논문,
+        <h1 className="text-3xl sm:text-5xl md:text-6xl font-extrabold tracking-tight mb-3 leading-tight break-keep">
+          논문에서 실험으로,
           <br />
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-sky-300 to-indigo-400">
-            실시간 인터랙티브 검증 세계로 재구성합니다.
+            검증 가능한 AI 과학 실험실
           </span>
         </h1>
 
-        <p className="text-sm sm:text-base text-slate-300 max-w-2xl mb-6 font-normal leading-relaxed">
-          자연어 과학 질문, 학술 논문(DOI/URL), 또는 교과서 도해를 입력하세요.
-          <br className="hidden sm:inline" />
-          결정론적 물리 엔진과 Gemini 가 결합하여 조작과 검증이 가능한 가상 연구실을 건설합니다.
+        <p className="text-sm sm:text-base text-slate-300 max-w-2xl mb-6 font-normal leading-relaxed break-keep">
+          실제 논문(DOI)이나 과학 질문을 입력하면 Crossref·OpenAlex에서 근거를 확인하고,
+          자동 검증을 통과한 자유 낙하 실험실을 만들어 드립니다.
         </p>
 
         {/* Mode Switcher Buttons: Question vs Paper vs Diagram */}
@@ -248,7 +229,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
             <span>Paper-to-Lab (논문 변환)</span>
           </button>
 
-          <button
+{FEATURES.diagramToLab && (          <button
             onClick={() => {
               sound.playClick();
               onOpenDiagramToLab();
@@ -257,7 +238,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
           >
             <Image className="w-4 h-4 text-cyan-400" />
             <span>Diagram-to-Lab (도판 복원)</span>
-          </button>
+          </button>)}
         </div>
 
         {/* Central Search Form */}
@@ -274,7 +255,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="무엇을 실험해 볼까? (예: 진공에서 깃털과 볼링공의 낙하, 스넬의 법칙)"
+              placeholder="과학 질문 또는 논문 DOI (예: 공기저항이 있으면 무거운 공이 먼저 떨어질까?)"
               disabled={isLoading}
               className="w-full bg-transparent text-white placeholder-slate-400 text-sm sm:text-base outline-none px-2 py-2"
             />
@@ -308,11 +289,14 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
 
         {/* Suggestion Chips */}
         <div className="flex flex-wrap items-center justify-center gap-2 mb-10 max-w-3xl">
-          <span className="text-xs text-slate-400 font-medium mr-1">추천 탐구 주제:</span>
+          <span className="text-xs text-slate-400 font-medium mr-1">바로 시작:</span>
           {sampleSuggestions.map((item, idx) => (
             <button
               key={idx}
-              onClick={() => handleChipClick(item.query)}
+              onClick={() => {
+                sound.playClick();
+                item.run();
+              }}
               disabled={isLoading}
               className="text-xs px-3 py-1.5 rounded-full bg-slate-900/70 hover:bg-cyan-950/60 border border-slate-800 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-200 transition cursor-pointer backdrop-blur-md"
             >
@@ -325,7 +309,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
         <div className="w-full text-left">
           <div className="text-xs font-mono uppercase tracking-wider text-slate-400 mb-3 px-1 flex items-center gap-2">
             <Layers className="w-3.5 h-3.5 text-cyan-400" />
-            <span>결정론적 검증 과학 실험실 엔진</span>
+            <span>검증된 실험실</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
@@ -334,7 +318,11 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
               return (
                 <div
                   key={i}
-                  onClick={() => handleChipClick(card.query)}
+                  onClick={() => {
+                    sound.playClick();
+                    if (card.instant) onQuickStart();
+                    else onSearch(card.query);
+                  }}
                   className="group relative p-4 rounded-2xl bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800 hover:border-cyan-500/40 backdrop-blur-xl transition duration-300 cursor-pointer flex flex-col justify-between overflow-hidden shadow-lg hover:shadow-cyan-950/40"
                 >
                   <div className="absolute top-0 right-0 w-28 h-28 bg-gradient-to-br from-cyan-500/10 to-transparent rounded-bl-full pointer-events-none group-hover:scale-110 transition-transform" />

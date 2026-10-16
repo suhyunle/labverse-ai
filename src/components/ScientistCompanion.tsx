@@ -1,252 +1,257 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, Sparkles, ChevronDown, ChevronUp, Zap, CheckCircle2, X } from 'lucide-react';
-import { ExperimentSpec, ChatMessage } from '../types';
+import React, { useEffect, useRef, useState } from 'react';
+import { Bot, Send, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { ExperimentSpec } from '../types';
 import { sound } from '../lib/audio';
+import { MarkdownText } from './MarkdownText';
+import { validateVariableUpdates } from '../verification';
+import type { GravityRunResult } from '../simulations/GravitySimulation';
+
+interface FollowUp {
+  title: string;
+  rationale: string | null;
+  variableChanges: Record<string, number>;
+}
+
+interface NovaMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'error';
+  content: string;
+  verdict?: 'supported' | 'contradicted' | 'inconclusive' | 'none';
+  proposals?: FollowUp[];
+  model?: string;
+}
 
 interface ScientistCompanionProps {
   experimentSpec: ExperimentSpec;
   currentVariables: Record<string, number>;
-  liveMetrics: Record<string, number | string>;
+  runResult: GravityRunResult | null;
+  hypothesis: string;
+  onHypothesisChange: (text: string) => void;
   onApplyVariableUpdates: (updates: Record<string, number>) => void;
 }
 
+const VERDICT_TEXT: Record<string, { label: string; cls: string }> = {
+  supported: { label: '가설과 일치', cls: 'bg-emerald-950 text-emerald-300 border-emerald-500/40' },
+  contradicted: { label: '가설과 불일치', cls: 'bg-red-950 text-red-300 border-red-500/40' },
+  inconclusive: { label: '판단 보류', cls: 'bg-amber-950 text-amber-300 border-amber-500/40' },
+};
+
+const labelOf = (spec: ExperimentSpec, id: string) => spec.variables.find((v) => v.id === id)?.label ?? id;
+const unitOf = (spec: ExperimentSpec, id: string) => spec.variables.find((v) => v.id === id)?.unit ?? '';
+
+/** Docked co-scientist panel. Calls the AI only when a run finishes or the student sends a message. */
 export const ScientistCompanion: React.FC<ScientistCompanionProps> = ({
   experimentSpec,
   currentVariables,
-  liveMetrics,
+  runResult,
+  hypothesis,
+  onHypothesisChange,
   onApplyVariableUpdates,
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
+  const [messages, setMessages] = useState<NovaMessage[]>([]);
   const [input, setInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    {
-      id: 'msg-welcome',
-      role: 'assistant',
-      content: `안녕하세요! AI 수석 연구원 **노바 박사(Dr. Nova)**입니다.
-"${experimentSpec.title}" 실험실에서 무엇이든 탐구해 보세요.
-**"압력을 최대로 올려줘"**처럼 말씀하시면 3D 시뮬레이션에 즉시 반영됩니다.`,
-      timestamp: Date.now(),
-    },
-  ]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [applied, setApplied] = useState<Record<string, boolean>>({});
+  const [applyErrors, setApplyErrors] = useState<Record<string, string>>({});
+  const lastResultsRef = useRef<GravityRunResult | null>(null);
+  const endRef = useRef<HTMLDivElement>(null);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const specVariables = experimentSpec.variables.map((v) => ({ id: v.id, label: v.label, min: v.min, max: v.max, default: v.default, unit: v.unit }));
 
   useEffect(() => {
-    if (isOpen) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, isOpen]);
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [messages, busy]);
 
-  const handleSendMessage = async (textToSend?: string) => {
-    const text = textToSend || input.trim();
-    if (!text || isSending) return;
+  // Fires once per finished run (runId changes); never on slider movement.
+  const analysedRunRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!runResult || analysedRunRef.current === runResult.runId) return;
+    analysedRunRef.current = runResult.runId;
+    lastResultsRef.current = runResult;
+    let cancelled = false;
+    (async () => {
+      setBusy('낙하 결과를 분석하는 중...');
+      try {
+        const res = await fetch('/api/analyze-run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            variables: runResult.variables,
+            specVariables,
+            results: { bodies: runResult.bodies, vacuumLandingTime: runResult.vacuumLandingTime },
+            hypothesis,
+          }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok) throw new Error(data.error || 'AI 분석 요청에 실패했습니다.');
+        setMessages((prev) => [
+          ...prev,
+          { id: `a-${runResult.runId}`, role: 'assistant', content: data.analysis, verdict: data.hypothesisVerdict, proposals: data.followUps, model: data.model },
+        ]);
+        sound.playEureka();
+      } catch (err: any) {
+        if (!cancelled) setMessages((prev) => [...prev, { id: `e-${runResult.runId}`, role: 'error', content: err?.message || 'AI 분석에 실패했습니다.' }]);
+      } finally {
+        if (!cancelled) setBusy(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runResult]);
 
+  const send = async () => {
+    const text = input.trim();
+    if (!text || busy) return;
     sound.playClick();
     setInput('');
-
-    const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: text,
-      timestamp: Date.now(),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setIsSending(true);
-
+    setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: 'user', content: text }]);
+    setBusy('답변을 작성하는 중...');
     try {
-      const response = await fetch('/api/chat-scientist', {
+      const res = await fetch('/api/chat-scientist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userMessage: text,
-          experimentSpec,
+          experimentTitle: experimentSpec.title,
           currentVariables,
-          liveMetrics,
+          specVariables,
+          lastResults: lastResultsRef.current ? { bodies: lastResultsRef.current.bodies } : null,
         }),
       });
-
-      const data = await response.json();
-
-      if (data.variableUpdates && Object.keys(data.variableUpdates).length > 0) {
-        sound.playEureka();
-        onApplyVariableUpdates(data.variableUpdates);
-      }
-
-      const assistantMsg: ChatMessage = {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: data.responseText || '실험 변수와의 상호작용을 관측했습니다.',
-        timestamp: Date.now(),
-        actionSummary: data.actionSummary,
-        variableUpdates: data.variableUpdates,
-        followUpSuggestion: data.followUpSuggestion,
-      };
-
-      setMessages((prev) => [...prev, assistantMsg]);
-    } catch (err) {
-      console.error('Companion request error:', err);
-      const fallbackMsg: ChatMessage = {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content:
-          '가상 연구실의 물리 시뮬레이션 데이터를 실시간 분석 중입니다. 슬라이더로 변수를 직접 조작하거나 다른 가설을 시험해 보세요.',
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, fallbackMsg]);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'AI 응답 요청에 실패했습니다.');
+      const proposals: FollowUp[] = data.proposedChanges
+        ? [{ title: data.changeSummary || '제안된 조건 변경', rationale: null, variableChanges: data.proposedChanges }]
+        : [];
+      setMessages((prev) => [...prev, { id: `n-${Date.now()}`, role: 'assistant', content: data.responseText, proposals, model: data.model }]);
+    } catch (err: any) {
+      setMessages((prev) => [...prev, { id: `e-${Date.now()}`, role: 'error', content: err?.message || 'AI 응답에 실패했습니다.' }]);
     } finally {
-      setIsSending(false);
+      setBusy(null);
     }
   };
 
+  // Apply only after the student clicks, and only if the browser-side verification also passes.
+  const apply = (key: string, changes: Record<string, number>) => {
+    const check = validateVariableUpdates(experimentSpec, changes);
+    if (!check.ok) {
+      setApplyErrors((p) => ({ ...p, [key]: check.errors.join(' / ') }));
+      return;
+    }
+    sound.playEureka();
+    onApplyVariableUpdates(check.accepted);
+    setApplied((p) => ({ ...p, [key]: true }));
+    setApplyErrors((p) => ({ ...p, [key]: '' }));
+  };
+
   return (
-    <>
-      {/* Compact Header Pill when collapsed (Minimizes screen occlusion) */}
-      {!isOpen ? (
-        <button
-          onClick={() => {
-            sound.playClick();
-            setIsOpen(true);
-          }}
-          className="fixed top-16 right-72 sm:right-80 z-30 px-3 py-1.5 rounded-xl bg-slate-950/80 hover:bg-slate-900 border border-cyan-500/40 backdrop-blur-xl shadow-xl shadow-black/60 text-white flex items-center gap-2 cursor-pointer transition hover:scale-105 select-none"
-          title="AI 과학 동반자 Dr. Nova 카드 펼치기"
-        >
-          <div className="w-5 h-5 rounded-md bg-gradient-to-tr from-cyan-400 to-blue-500 flex items-center justify-center text-slate-950 shadow-sm font-bold">
-            <Bot className="w-3.5 h-3.5 text-slate-950" />
-          </div>
-          <span className="text-xs font-bold text-cyan-300 font-mono">Dr. Nova AI</span>
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <ChevronDown className="w-3.5 h-3.5 text-cyan-400" />
-        </button>
-      ) : (
-        /* Expanded Floating Card (Right-docked, restrained footprint, non-occluding) */
-        <div className="fixed top-28 right-4 z-40 w-80 sm:w-92 h-[480px] bg-slate-950/92 backdrop-blur-2xl border border-cyan-500/40 rounded-2xl shadow-2xl shadow-black/90 flex flex-col text-white animate-fade-in select-none">
-          {/* Card Header */}
-          <div className="p-3 border-b border-slate-800 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-cyan-400 to-blue-500 flex items-center justify-center text-slate-950 shadow-md">
-                <Bot className="w-4 h-4 text-slate-950" />
-              </div>
-              <div>
-                <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <span>노바 박사 (Dr. Nova)</span>
-                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-500/40 text-cyan-300 font-mono">
-                    AI 과학자
-                  </span>
-                </div>
-                <div className="text-[10px] text-slate-400">자연어 물리 조작 & 탐구 안내</div>
-              </div>
-            </div>
+    <div className="p-2.5 rounded-xl bg-slate-900/70 border border-cyan-500/30 space-y-2">
+      <div className="flex items-center gap-2">
+        <div className="w-6 h-6 rounded-md bg-gradient-to-tr from-cyan-400 to-blue-500 flex items-center justify-center">
+          <Bot className="w-3.5 h-3.5 text-slate-950" />
+        </div>
+        <div>
+          <div className="text-xs font-bold text-white">노바 박사 · AI 공동 연구자</div>
+          <div className="text-[10px] text-slate-400">낙하가 끝나면 결과를 분석하고 다음 실험을 제안합니다</div>
+        </div>
+      </div>
 
-            <button
-              onClick={() => {
-                sound.playClick();
-                setIsOpen(false);
-              }}
-              className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
-              title="카드 접기"
-            >
-              <ChevronUp className="w-4 h-4" />
-            </button>
-          </div>
+      <label className="block">
+        <span className="text-[11px] text-slate-400">내 가설 (선택, 실행 전에 적어 두세요)</span>
+        <input
+          type="text"
+          value={hypothesis}
+          onChange={(e) => onHypothesisChange(e.target.value)}
+          placeholder="예: 공기 중에서는 무거운 공이 먼저 떨어질 것이다"
+          className="mt-0.5 w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2 py-1 text-[11px] text-white outline-none placeholder-slate-600"
+        />
+      </label>
 
-          {/* Message Stream */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-2.5 text-xs select-text">
-            {messages.map((msg) => {
-              const isUser = msg.role === 'user';
+      <div className="max-h-72 overflow-y-auto space-y-2 select-text pr-0.5">
+        {messages.length === 0 && !busy && (
+          <div className="text-[11px] text-slate-500">아직 분석할 결과가 없습니다. 왼쪽에서 낙하를 시작해 끝까지 실행해 보세요.</div>
+        )}
+        {messages.map((m) => (
+          <div
+            key={m.id}
+            className={`rounded-lg p-2 text-[11px] leading-relaxed ${
+              m.role === 'user' ? 'bg-cyan-900/40 text-cyan-50 ml-6' : m.role === 'error' ? 'bg-red-950/40 border border-red-500/30 text-red-200' : 'bg-slate-950/80 border border-slate-800 text-slate-200'
+            }`}
+          >
+            {m.role === 'error' && <AlertTriangle className="w-3 h-3 inline mr-1 text-red-400" />}
+            {m.verdict && VERDICT_TEXT[m.verdict] && (
+              <span className={`inline-block mb-1 px-1.5 py-0.5 rounded border text-[10px] font-mono ${VERDICT_TEXT[m.verdict].cls}`}>{VERDICT_TEXT[m.verdict].label}</span>
+            )}
+            {m.role === 'assistant' ? <MarkdownText>{m.content}</MarkdownText> : <span>{m.content}</span>}
+            {m.proposals?.map((p, i) => {
+              const key = `${m.id}:${i}`;
               return (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
-                >
-                  <div
-                    className={`max-w-[88%] rounded-xl p-2.5 leading-relaxed ${
-                      isUser
-                        ? 'bg-gradient-to-br from-cyan-600 to-blue-600 text-white rounded-tr-none shadow'
-                        : 'bg-slate-900/90 border border-slate-800 text-slate-200 rounded-tl-none shadow'
-                    }`}
-                  >
-                    <p className="whitespace-pre-line text-xs">{msg.content}</p>
-
-                    {/* Action execution feedback */}
-                    {msg.actionSummary && (
-                      <div className="mt-1.5 pt-1.5 border-t border-slate-700/60 flex items-center gap-1.5 text-[10px] text-emerald-300 font-medium">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                        <span>{msg.actionSummary}</span>
+                <div key={key} className="mt-1.5 p-1.5 rounded-lg bg-slate-900 border border-cyan-500/20 space-y-1">
+                  <div className="font-bold text-cyan-300">후속 실험: {p.title}</div>
+                  {p.rationale && <div className="text-slate-400">{p.rationale}</div>}
+                  <div className="font-mono text-[10px] text-slate-300">
+                    {Object.entries(p.variableChanges).map(([id, v]) => (
+                      <div key={id}>
+                        {labelOf(experimentSpec, id)}: {currentVariables[id] ?? '—'} → <span className="text-cyan-200">{v} {unitOf(experimentSpec, id)}</span>
                       </div>
-                    )}
-
-                    {msg.followUpSuggestion && (
-                      <div
-                        onClick={() => handleSendMessage(msg.followUpSuggestion)}
-                        className="mt-1.5 text-[10px] text-cyan-300 bg-slate-950/70 p-1.5 rounded border border-cyan-500/20 hover:border-cyan-400/50 cursor-pointer transition flex items-center gap-1"
-                      >
-                        <Sparkles className="w-3 h-3 text-cyan-400 shrink-0" />
-                        <span>추천: &ldquo;{msg.followUpSuggestion}&rdquo;</span>
-                      </div>
-                    )}
+                    ))}
                   </div>
+                  {applied[key] ? (
+                    <div className="flex items-center gap-1 text-emerald-300">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>적용했습니다. 낙하 시작을 눌러 다시 실행하세요.</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => apply(key, p.variableChanges)}
+                      className="px-2 py-0.5 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold cursor-pointer"
+                    >
+                      적용
+                    </button>
+                  )}
+                  {applyErrors[key] && <div className="text-red-300">검증 실패: {applyErrors[key]}</div>}
                 </div>
               );
             })}
-
-            {isSending && (
-              <div className="flex items-center gap-2 text-cyan-400 text-xs p-2 rounded-xl bg-slate-900/60 border border-slate-800">
-                <div className="w-3 h-3 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                <span>물리 상태를 분석 중입니다...</span>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
+            {m.model && <div className="mt-1 text-[9px] text-slate-600 font-mono">{m.model}</div>}
           </div>
+        ))}
+        {busy && (
+          <div className="flex items-center gap-2 text-cyan-400 text-[11px] p-1.5">
+            <div className="w-3 h-3 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+            <span>{busy}</span>
+          </div>
+        )}
+        <div ref={endRef} />
+      </div>
 
-          {/* Suggested Queries Chips */}
-          {experimentSpec.suggestedQueries && experimentSpec.suggestedQueries.length > 0 && (
-            <div className="px-2.5 py-1.5 border-t border-slate-800/80 bg-slate-950/60 flex items-center gap-1.5 overflow-x-auto">
-              <span className="text-[10px] text-slate-400 shrink-0 flex items-center gap-0.5">
-                <Zap className="w-3 h-3 text-cyan-400" />
-                <span>추천:</span>
-              </span>
-              {experimentSpec.suggestedQueries.slice(0, 2).map((query, i) => (
-                <button
-                  key={i}
-                  onClick={() => handleSendMessage(query)}
-                  className="text-[10px] px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950/60 border border-slate-800 hover:border-cyan-500/40 text-slate-300 hover:text-cyan-200 transition shrink-0 cursor-pointer truncate max-w-[140px]"
-                  title={query}
-                >
-                  {query}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Input Bar */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSendMessage();
-            }}
-            className="p-2.5 border-t border-slate-800 bg-slate-950/90 flex items-center gap-1.5"
-          >
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="명령 또는 질문 (예: 압력 최대로)"
-              disabled={isSending}
-              className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none placeholder-slate-500"
-            />
-            <button
-              type="submit"
-              disabled={!input.trim() || isSending}
-              className="p-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 disabled:opacity-40 text-slate-950 font-bold transition cursor-pointer"
-            >
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          </form>
-        </div>
-      )}
-    </>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          send();
+        }}
+        className="flex items-center gap-1.5"
+      >
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="노바 박사에게 질문 (예: 달에서는 어떻게 될까?)"
+          disabled={!!busy}
+          className="flex-1 bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2 py-1.5 text-[11px] text-white outline-none placeholder-slate-600"
+        />
+        <button
+          type="submit"
+          disabled={!input.trim() || !!busy}
+          className="p-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 disabled:opacity-40 text-slate-950 cursor-pointer"
+          title="보내기"
+        >
+          <Send className="w-3.5 h-3.5" />
+        </button>
+      </form>
+    </div>
   );
 };

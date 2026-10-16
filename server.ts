@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { buildGravityPresetSpec, normalizeGravitySpec, GRAVITY_VARIABLE_CATALOG } from './src/generation/gravitySpec';
-import { verifyExperimentSpec, ALLOWED_FORMULAS } from './src/verification';
+import { verifyExperimentSpec, validateVariableUpdates, ALLOWED_FORMULAS } from './src/verification';
 
 dotenv.config();
 
@@ -18,7 +18,7 @@ app.use(express.json());
 
 // 0. Cloud Run Health Check Endpoint
 app.get('/health', (_req: Request, res: Response) => {
-  res.status(200).json({ status: 'healthy', timestamp: Date.now(), service: 'science-universe-3.0' });
+  res.status(200).json({ status: 'healthy', timestamp: Date.now(), service: 'labverse-ai' });
 });
 
 // Initialize GoogleGenAI
@@ -293,7 +293,7 @@ app.post('/api/plan-experiment-legacy', async (req: Request, res: Response) => {
     // Call Gemini API if available (gemini-4-argon primary -> gemini-3.8-flash fallback)
     if (apiKey) {
       try {
-        const systemPrompt = `You are the Lead Scientific Experiment Architect at GENESIS LAB 3.0.
+        const systemPrompt = `You are the Lead Scientific Experiment Architect at LabVerse AI.
 Your mission is to map any scientific inquiry into one of the verified simulation environments:
 - 'volcano' (magma chamber pressure, eruption dynamics, cross-section cutaway)
 - 'gravity' (free fall, vacuum, air drag, Galileo experiments)
@@ -749,7 +749,7 @@ app.post('/api/evaluate-hypothesis', async (req: Request, res: Response) => {
 
     if (apiKey) {
       try {
-        const prompt = `You are the Lead Scientific Reviewer at GENESIS LAB 3.0.
+        const prompt = `You are the Lead Scientific Reviewer at LabVerse AI.
 A student or researcher has formulated a scientific hypothesis before running an experiment.
 
 Active Experiment: ${experimentSpec?.title} (${experimentSpec?.sceneType})
@@ -810,7 +810,7 @@ Return strictly JSON:
 });
 
 // 4. AI Scientist Companion API
-app.post('/api/chat-scientist', async (req: Request, res: Response) => {
+app.post('/api/chat-scientist-legacy', async (req: Request, res: Response) => {
   try {
     const { userMessage, experimentSpec, currentVariables, liveMetrics } = req.body;
 
@@ -821,7 +821,7 @@ app.post('/api/chat-scientist', async (req: Request, res: Response) => {
 
     if (apiKey) {
       try {
-        const prompt = `You are Dr. Nova (노바 박사), Chief Research Scientist at GENESIS LAB 3.0.
+        const prompt = `You are Dr. Nova (노바 박사), Chief Research Scientist at LabVerse AI.
 Active Experiment: ${experimentSpec?.title} (${experimentSpec?.sceneType})
 Current Variables: ${JSON.stringify(currentVariables || {})}
 Live Telemetry: ${JSON.stringify(liveMetrics || {})}
@@ -883,6 +883,114 @@ Return JSON:
   }
 });
 
+// 4. AI Co-Scientist (Dr. Nova). Called only on meaningful events (a finished run or an explicit
+// chat message), never while sliders move. Every proposed variable change is validated here AND
+// again in the browser before the user's "apply" click takes effect.
+interface NovaSpecVar { id: string; label?: string; min: number; max: number; default: number; unit?: string }
+
+function novaStubSpec(vars: NovaSpecVar[]): any {
+  return { sceneType: 'gravity', variables: vars };
+}
+
+function validateChanges(vars: NovaSpecVar[], changes: unknown) {
+  if (!changes || typeof changes !== 'object') return null;
+  const r = validateVariableUpdates(novaStubSpec(vars), changes as Record<string, unknown>);
+  return r.ok && Object.keys(r.accepted).length ? r.accepted : null;
+}
+
+function sanitizeSpecVars(x: unknown): NovaSpecVar[] {
+  if (!Array.isArray(x)) return [];
+  return x
+    .filter((v: any) => typeof v?.id === 'string' && [v.min, v.max, v.default].every((n) => typeof n === 'number' && Number.isFinite(n)))
+    .slice(0, 20)
+    .map((v: any) => ({ id: v.id, label: typeof v.label === 'string' ? v.label : v.id, min: v.min, max: v.max, default: v.default, unit: typeof v.unit === 'string' ? v.unit : '' }));
+}
+
+const NOVA_RULES = `You are Dr. Nova (노바 박사), an AI co-scientist inside LabVerse AI, a verified free-fall physics lab.
+Write in Korean. Use Markdown (**bold**, lists) and LaTeX with $...$ for formulas. Be concrete: quote the numbers you were given. Never invent measurements.
+Physics model of the lab: 1-D fall, quadratic drag F_d = ½ρv²C_dA, RK4 integration, g and ρ constant.`;
+
+app.post('/api/analyze-run', async (req: Request, res: Response) => {
+  try {
+    const { variables, specVariables, results, hypothesis } = req.body || {};
+    const vars = sanitizeSpecVars(specVariables);
+    if (!variables || !results || vars.length === 0) {
+      res.status(400).json({ error: 'variables, specVariables and results are required' });
+      return;
+    }
+    if (!apiKey) {
+      res.status(503).json({ error: 'AI 분석을 사용할 수 없습니다 (GEMINI_API_KEY가 설정되지 않았습니다).' });
+      return;
+    }
+    const ranges = vars.map((v) => `${v.id} ${v.min}..${v.max} ${v.unit}`).join('; ');
+    const prompt = `${NOVA_RULES}
+
+A student just finished one drop run. Data (compact JSON):
+variables: ${JSON.stringify(variables)}
+results: ${JSON.stringify(results)}
+student_hypothesis: ${JSON.stringify(typeof hypothesis === 'string' && hypothesis.trim() ? hypothesis.trim().slice(0, 300) : null)}
+
+Tasks:
+1. "analysis": at most ~170 words. Explain what happened and why, using the numbers. If a hypothesis was given, say whether the data supports it.
+2. "hypothesisVerdict": "supported" | "contradicted" | "inconclusive" | "none" (none if no hypothesis).
+3. "followUps": 1 or 2 follow-up experiments. Each: { "title", "rationale" (1-2 sentences), "variableChanges": { "<id>": number } } using ONLY these ids and ranges: ${ranges}. Change values so the next run teaches something new.
+
+Return JSON: { "analysis": string, "hypothesisVerdict": string, "followUps": [...] }`;
+
+    const { data, model } = await generateJson(prompt);
+    const verdicts = ['supported', 'contradicted', 'inconclusive', 'none'];
+    const followUps = (Array.isArray(data?.followUps) ? data.followUps : [])
+      .slice(0, 2)
+      .map((f: any) => ({ title: asStr(f?.title), rationale: asStr(f?.rationale), variableChanges: validateChanges(vars, f?.variableChanges) }))
+      .filter((f: any) => f.title && f.variableChanges);
+    res.json({
+      analysis: asStr(data?.analysis) ?? '분석 결과를 생성하지 못했습니다.',
+      hypothesisVerdict: verdicts.includes(data?.hypothesisVerdict) ? data.hypothesisVerdict : 'none',
+      followUps,
+      model,
+    });
+  } catch (err: any) {
+    console.error('Analyze run error:', err);
+    res.status(502).json({ error: `AI 분석에 실패했습니다 (${err?.message || '알 수 없는 오류'}).` });
+  }
+});
+
+app.post('/api/chat-scientist', async (req: Request, res: Response) => {
+  try {
+    const { userMessage, experimentTitle, currentVariables, specVariables, lastResults } = req.body || {};
+    if (typeof userMessage !== 'string' || !userMessage.trim()) {
+      res.status(400).json({ error: 'userMessage is required' });
+      return;
+    }
+    const vars = sanitizeSpecVars(specVariables);
+    if (!apiKey) {
+      res.status(503).json({ error: 'AI 응답을 사용할 수 없습니다 (GEMINI_API_KEY가 설정되지 않았습니다).' });
+      return;
+    }
+    const ranges = vars.map((v) => `${v.id} ${v.min}..${v.max} ${v.unit}`).join('; ');
+    const prompt = `${NOVA_RULES}
+
+Experiment: ${typeof experimentTitle === 'string' ? experimentTitle.slice(0, 120) : ''}
+Current variables: ${JSON.stringify(currentVariables ?? {})}
+Last run results: ${JSON.stringify(lastResults ?? null)}
+Student says: "${userMessage.trim().slice(0, 500)}"
+
+Answer briefly (at most ~120 words). If the student asks to change conditions, put the new values in "proposedChanges" using ONLY these ids and ranges: ${ranges}. Otherwise null. Nothing is applied until the student clicks apply.
+Return JSON: { "responseText": string, "proposedChanges": { "<id>": number } | null, "changeSummary": string | null }`;
+
+    const { data, model } = await generateJson(prompt);
+    res.json({
+      responseText: asStr(data?.responseText) ?? '답변을 생성하지 못했습니다.',
+      proposedChanges: validateChanges(vars, data?.proposedChanges),
+      changeSummary: asStr(data?.changeSummary),
+      model,
+    });
+  } catch (err: any) {
+    console.error('Chat scientist error:', err);
+    res.status(502).json({ error: `AI 응답에 실패했습니다 (${err?.message || '알 수 없는 오류'}).` });
+  }
+});
+
 // Vite Middleware & Static Serving setup
 async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
@@ -903,7 +1011,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[GENESIS LAB 3.0] Server running on http://0.0.0.0:${PORT}`);
+    console.log(`[LabVerse AI] Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

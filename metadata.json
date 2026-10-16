@@ -1,6 +1,6 @@
 {
-  "name": "Science Universe",
-  "description": "AI-native interactive 3D science laboratory for exploratory simulation and learning",
+  "name": "LabVerse AI",
+  "description": "논문에서 실험으로 — 검증 가능한 AI 과학 실험실. Turns real papers (Crossref/OpenAlex) into verified, interactive free-fall experiments.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

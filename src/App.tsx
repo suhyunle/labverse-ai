@@ -25,6 +25,8 @@ import { ExperimentSpec, ExperimentSnapshot, ResearchTreeNode, LearningLevel } f
 import { sound } from './lib/audio';
 import { verifyExperimentSpec } from './verification';
 import { planExperiment, describePlanEvent } from './lib/planExperiment';
+import { buildGravityPresetSpec } from './generation/gravitySpec';
+import { FEATURES } from './config/features';
 
 export default function App() {
   const [currentExperiment, setCurrentExperiment] = useState<ExperimentSpec | null>(null);
@@ -38,6 +40,8 @@ export default function App() {
   const [loadingStep, setLoadingStep] = useState<string>('');
   const [planError, setPlanError] = useState<string | null>(null);
   const [labNotice, setLabNotice] = useState<string | null>(null);
+  const [runResult, setRunResult] = useState<GravityRunResult | null>(null);
+  const [hypothesis, setHypothesis] = useState<string>('');
   const [learningLevel, setLearningLevel] = useState<LearningLevel>('intermediate');
 
   // Modals state
@@ -47,12 +51,13 @@ export default function App() {
   const [isEvidenceLensOpen, setIsEvidenceLensOpen] = useState<boolean>(false);
   const [isResearchTreeOpen, setIsResearchTreeOpen] = useState<boolean>(false);
   const [isPaperToLabOpen, setIsPaperToLabOpen] = useState<boolean>(false);
+  const [paperInitialQuery, setPaperInitialQuery] = useState<string>('');
   const [isDiagramToLabOpen, setIsDiagramToLabOpen] = useState<boolean>(false);
 
   // Snapshots
   const [snapshots, setSnapshots] = useState<ExperimentSnapshot[]>(() => {
     try {
-      const saved = localStorage.getItem('genesis_lab_snapshots');
+      const saved = localStorage.getItem('labverse_snapshots');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -62,7 +67,7 @@ export default function App() {
   // Research Branching Tree
   const [researchNodes, setResearchNodes] = useState<ResearchTreeNode[]>(() => {
     try {
-      const saved = localStorage.getItem('genesis_lab_research_nodes');
+      const saved = localStorage.getItem('labverse_research_nodes');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -75,13 +80,13 @@ export default function App() {
   // Sync to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem('genesis_lab_snapshots', JSON.stringify(snapshots));
+      localStorage.setItem('labverse_snapshots', JSON.stringify(snapshots));
     } catch {}
   }, [snapshots]);
 
   useEffect(() => {
     try {
-      localStorage.setItem('genesis_lab_research_nodes', JSON.stringify(researchNodes));
+      localStorage.setItem('labverse_research_nodes', JSON.stringify(researchNodes));
     } catch {}
   }, [researchNodes]);
 
@@ -96,6 +101,7 @@ export default function App() {
   }, []);
 
   const handleGravityRunComplete = useCallback((r: GravityRunResult) => {
+    setRunResult(r);
     const [a, b] = r.bodies;
     setLiveMetrics({
       '물체 A 착지 시간': `${a.simLandingTime.toFixed(3)} 초`,
@@ -139,8 +145,20 @@ export default function App() {
     }
   };
 
+  // Built-in verified free-fall lab: opens instantly, never touches the network.
+  const handleQuickStart = (overrides?: Record<string, number>) => {
+    loadExperimentSpec(buildGravityPresetSpec());
+    if (overrides) setVariables((prev) => ({ ...prev, ...overrides }));
+  };
+
+  const openPaperToLab = (doi?: string) => {
+    setPaperInitialQuery(doi ?? '');
+    setIsPaperToLabOpen(true);
+  };
+
   const loadExperimentSpec = (exp: ExperimentSpec, notice?: string) => {
     setLabNotice(notice ?? null);
+    setRunResult(null);
     const initialVars: Record<string, number> = {};
     exp.variables.forEach((v) => {
       initialVars[v.id] = v.default;
@@ -259,7 +277,7 @@ export default function App() {
         onNewExperiment={() => setCurrentExperiment(null)}
         onResetVariables={handleResetVariables}
         onOpenNotebook={() => setIsNotebookOpen(true)}
-        onOpenPaperToLab={() => setIsPaperToLabOpen(true)}
+        onOpenPaperToLab={() => openPaperToLab()}
         onOpenParallelUniverse={() => setIsParallelUniverseOpen(true)}
         onOpenHypothesisArena={() => setIsHypothesisArenaOpen(true)}
         onOpenEvidenceLens={() => setIsEvidenceLensOpen(true)}
@@ -275,7 +293,8 @@ export default function App() {
       {!currentExperiment ? (
         <LandingHero
           onSearch={handlePlanExperiment}
-          onOpenPaperToLab={() => setIsPaperToLabOpen(true)}
+          onOpenPaperToLab={openPaperToLab}
+          onQuickStart={handleQuickStart}
           onOpenDiagramToLab={() => setIsDiagramToLabOpen(true)}
           isLoading={isLoading}
           loadingStep={loadingStep}
@@ -290,6 +309,17 @@ export default function App() {
                 variableSpecs={currentExperiment.variables}
                 uiComponents={currentExperiment.uiComponents}
                 notice={labNotice}
+                novaSlot={
+                  <ScientistCompanion
+                    key={currentExperiment.id}
+                    experimentSpec={currentExperiment}
+                    currentVariables={variables}
+                    runResult={runResult}
+                    hypothesis={hypothesis}
+                    onHypothesisChange={setHypothesis}
+                    onApplyVariableUpdates={handleApplyVariableUpdates}
+                  />
+                }
                 variables={variables}
                 verification={verification}
                 onChangeVariable={handleChangeVariable}
@@ -355,14 +385,6 @@ export default function App() {
           />
           )}
 
-          {/* AI Scientist Companion (Dr. Nova) */}
-          <ScientistCompanion
-            experimentSpec={currentExperiment}
-            currentVariables={variables}
-            liveMetrics={liveMetrics}
-            onApplyVariableUpdates={handleApplyVariableUpdates}
-          />
-
           {/* Guided Steps & Learning Objectives (Bottom-left) */}
           {currentExperiment.sceneType !== 'gravity' && (
           <GuidedSteps
@@ -389,6 +411,7 @@ export default function App() {
           )}
 
           {/* Lab Notebook & Snapshot Comparator Modal */}
+          {FEATURES.labNotebook && (
           <LabNotebookModal
             isOpen={isNotebookOpen}
             onClose={() => setIsNotebookOpen(false)}
@@ -397,16 +420,20 @@ export default function App() {
             onRestoreSnapshot={handleRestoreSnapshot}
             onDeleteSnapshot={handleDeleteSnapshot}
           />
+          )}
 
           {/* Parallel Universe Modal (Split-Screen) */}
+          {FEATURES.parallelUniverse && (
           <ParallelUniverseMode
             isOpen={isParallelUniverseOpen}
             onClose={() => setIsParallelUniverseOpen(false)}
             experimentSpec={currentExperiment}
             currentVariables={variables}
           />
+          )}
 
           {/* Hypothesis Arena Modal */}
+          {FEATURES.hypothesisArena && (
           <HypothesisArena
             isOpen={isHypothesisArenaOpen}
             onClose={() => setIsHypothesisArenaOpen(false)}
@@ -415,15 +442,19 @@ export default function App() {
             liveMetrics={liveMetrics}
             onApplyFollowUpVariables={handleApplyVariableUpdates}
           />
+          )}
 
           {/* Evidence Lens Modal */}
+          {FEATURES.evidenceLens && (
           <EvidenceLens
             isOpen={isEvidenceLensOpen}
             onClose={() => setIsEvidenceLensOpen(false)}
             evidenceItems={currentExperiment.evidenceItems}
           />
+          )}
 
           {/* Branching Research Tree Modal */}
+          {FEATURES.researchTree && (
           <ResearchTree
             nodes={researchNodes}
             currentNodeId={currentNodeId}
@@ -432,6 +463,7 @@ export default function App() {
             onForkNode={handleForkNode}
             onSelectNode={handleSelectTreeNode}
           />
+          )}
 
         </main>
       )}
@@ -439,6 +471,7 @@ export default function App() {
       {/* Modals usable from the landing screen as well */}
       <PaperToLabModal
         isOpen={isPaperToLabOpen}
+        initialQuery={paperInitialQuery}
         onClose={() => setIsPaperToLabOpen(false)}
         onSynthesizeExperiment={loadExperimentSpec}
       />
