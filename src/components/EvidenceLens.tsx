@@ -77,7 +77,7 @@ export const EvidenceLens: React.FC<EvidenceLensProps> = ({
   const getTypeBadge = (type: EvidenceItem['type']) => {
     switch (type) {
       case 'verified_constant':
-        return <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/50 text-emerald-300 font-mono text-[10px]">공인 물리 상수 [VERIFIED]</span>;
+        return <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/50 text-emerald-300 font-mono text-[10px]">물리 상수 [출처 표기]</span>;
       case 'established_law':
         return <span className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-500/50 text-cyan-300 font-mono text-[10px]">검증된 물리 법칙 [LAW]</span>;
       case 'user_parameter':

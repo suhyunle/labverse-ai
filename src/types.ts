@@ -95,6 +95,8 @@ export interface ExperimentSpec {
   scientificPrinciples: ScientificPrinciple[];
   variables: VariableSpec[];
   observableOutputs: ObservableOutput[];
+  /** Computational formulas (plain text or LaTeX); each must be on the verification allow-list. */
+  formulas?: string[];
   simulationModel: string;
   visualEffects: string[];
   safetyNotes: string[];

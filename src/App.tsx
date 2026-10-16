@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { LandingHero } from './components/LandingHero';
 import { VariableControls } from './components/VariableControls';
@@ -23,6 +23,7 @@ import { ConceptualSimulation } from './simulations/ConceptualSimulation';
 
 import { ExperimentSpec, ExperimentSnapshot, ResearchTreeNode, LearningLevel } from './types';
 import { sound } from './lib/audio';
+import { verifyExperimentSpec } from './verification';
 
 export default function App() {
   const [currentExperiment, setCurrentExperiment] = useState<ExperimentSpec | null>(null);
@@ -101,6 +102,12 @@ export default function App() {
       '진공 이론 낙하 시간': `${r.vacuumLandingTime.toFixed(3)} 초`,
     });
   }, []);
+
+  // Real verification of the active experiment against the current variable values.
+  const verification = useMemo(
+    () => (currentExperiment?.sceneType === 'gravity' ? verifyExperimentSpec(currentExperiment, variables) : null),
+    [currentExperiment, variables],
+  );
 
   const handleToggleMute = () => {
     const next = !isMuted;
@@ -290,6 +297,7 @@ export default function App() {
               <GravitySimulation
                 variableSpecs={currentExperiment.variables}
                 variables={variables}
+                verification={verification}
                 onChangeVariable={handleChangeVariable}
                 onRunComplete={handleGravityRunComplete}
               />

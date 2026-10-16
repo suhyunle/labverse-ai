@@ -15,6 +15,8 @@ import {
 } from '../engines/gravity';
 import { VariableSpec } from '../types';
 import { sound } from '../lib/audio';
+import { VerificationPanel } from '../components/VerificationPanel';
+import type { VerificationReport } from '../verification';
 
 export interface GravityRunResult {
   variables: Record<string, number>;
@@ -31,6 +33,7 @@ export interface GravityRunResult {
 interface GravitySimulationProps {
   variableSpecs: VariableSpec[];
   variables: Record<string, number>;
+  verification?: VerificationReport | null;
   onChangeVariable: (id: string, value: number) => void;
   /** Called once per finished run (never per frame). */
   onRunComplete?: (result: GravityRunResult) => void;
@@ -181,6 +184,7 @@ const SliderRow: React.FC<{ spec: VariableSpec; value: number; onChange: (v: num
 export const GravitySimulation: React.FC<GravitySimulationProps> = ({
   variableSpecs,
   variables,
+  verification = null,
   onChangeVariable,
   onRunComplete,
 }) => {
@@ -398,6 +402,7 @@ export const GravitySimulation: React.FC<GravitySimulationProps> = ({
 
       {/* Side panel: never overlaps the chamber */}
       <aside className="lg:w-[380px] shrink-0 overflow-y-auto border-t lg:border-t-0 lg:border-l border-slate-800 bg-slate-950/90 p-3 space-y-3 text-xs">
+        <VerificationPanel report={verification} />
         <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2">
           <div className="font-bold text-slate-200">환경 조건</div>
           <div className="flex flex-wrap gap-1">

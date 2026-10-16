@@ -203,7 +203,7 @@ export const HypothesisArena: React.FC<HypothesisArenaProps> = ({
                   </span>
                 </div>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 text-slate-400">
-                  VERIFIED
+                  AI 해설 (자동 검증 아님)
                 </span>
               </div>
 
