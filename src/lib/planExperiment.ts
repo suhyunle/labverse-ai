@@ -2,6 +2,8 @@ import type { ExperimentSpec } from '../types';
 import type { VerificationReport } from '../verification';
 
 export type PlanEvent =
+  | { type: 'step'; step: 'route' }
+  | { type: 'step'; step: 'lane'; lane: 'gravity' | 'general' }
   | { type: 'step'; step: 'generate'; attempt: number; maxAttempts: number }
   | { type: 'step'; step: 'verify'; attempt?: number; model?: string }
   | { type: 'retry'; attempt: number; errors: string[] }
@@ -11,6 +13,7 @@ export type PlanEvent =
       verification: VerificationReport;
       source: 'ai' | 'preset';
       model?: string;
+      tier?: VerificationReport['tier'];
       notice?: string;
       attempts: number;
       ms: number;
@@ -21,8 +24,14 @@ export type PlanDone = Extract<PlanEvent, { type: 'done' }>;
 
 /** Human-readable text for a progress event: only describes work the server actually did. */
 export function describePlanEvent(e: PlanEvent): string | null {
+  if (e.type === 'step' && e.step === 'route') return '질문의 주제를 분류하는 중';
+  if (e.type === 'step' && e.step === 'lane') {
+    return e.lane === 'gravity'
+      ? '자유 낙하 실험실로 설계 중 (엔진 검증 가능)'
+      : '주제에 맞는 실험실을 설계 중 (수식 기반 모델)';
+  }
   if (e.type === 'step' && e.step === 'generate') return `AI가 실험 스펙을 생성하는 중 (${e.attempt}/${e.maxAttempts}회)`;
-  if (e.type === 'step' && e.step === 'verify') return '생성된 스펙을 검증하는 중';
+  if (e.type === 'step' && e.step === 'verify') return '생성된 스펙을 검증하는 중 (수식·범위·반응성)';
   if (e.type === 'retry') return `검증 실패 → 오류를 AI에 전달해 재생성 중 (${e.errors[0] ?? ''})`;
   return null;
 }

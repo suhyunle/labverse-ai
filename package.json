@@ -9,7 +9,7 @@
     "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "test": "tsx scripts/test-engines.ts && tsx scripts/test-verification.ts",
+    "test": "tsx scripts/test-engines.ts && tsx scripts/test-verification.ts && tsx scripts/test-model-labs.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

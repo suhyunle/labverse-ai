@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Activity, Info, ChevronDown, ChevronUp, ShieldAlert, Cpu } from 'lucide-react';
+import { Activity, Info, ChevronDown, ChevronUp, ShieldAlert, Cpu, BadgeCheck, TriangleAlert } from 'lucide-react';
 import { ObservableOutput, ScientificPrinciple } from '../types';
+import type { VerificationReport } from '../verification';
 import { sound } from '../lib/audio';
 
 interface TelemetryDisplayProps {
@@ -8,7 +9,17 @@ interface TelemetryDisplayProps {
   observableSpecs: ObservableOutput[];
   principles: ScientificPrinciple[];
   safetyNotes?: string[];
+  /** What the checker actually proved about this lab; drives the honesty badge. */
+  verification?: VerificationReport | null;
+  limitations?: string;
 }
+
+/** Short badge text per tier — never claims more than the checks that ran. */
+const TIER_BADGE: Record<VerificationReport['tier'], { short: string; tone: string }> = {
+  strict: { short: '엄격 검증 (해석해 대조)', tone: 'text-emerald-300 border-emerald-500/40 bg-emerald-950/40' },
+  engine: { short: '엔진 검증 (전용 시뮬레이션)', tone: 'text-cyan-300 border-cyan-500/40 bg-cyan-950/40' },
+  model: { short: '모델 검증 (정량 예측 아님)', tone: 'text-amber-300 border-amber-500/40 bg-amber-950/40' },
+};
 
 export const KOREAN_LABEL_MAP: Record<string, string> = {
   // Volcano metrics & variables
@@ -80,6 +91,8 @@ export const TelemetryDisplay: React.FC<TelemetryDisplayProps> = ({
   observableSpecs,
   principles,
   safetyNotes = [],
+  verification = null,
+  limitations,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showFormulas, setShowFormulas] = useState(false);
@@ -148,6 +161,27 @@ export const TelemetryDisplay: React.FC<TelemetryDisplayProps> = ({
             </div>
           </div>
 
+          {/* What was actually verified. The tier is shown even when every check passed, because a
+              passing 'model' lab is still not a quantitative prediction. */}
+          {verification && (
+            <div className={`mb-2.5 px-2 py-1.5 rounded-lg border text-[10px] leading-snug flex items-start gap-1.5 ${TIER_BADGE[verification.tier].tone}`}>
+              {verification.passed ? (
+                <BadgeCheck className="w-3.5 h-3.5 shrink-0 mt-px" />
+              ) : (
+                <TriangleAlert className="w-3.5 h-3.5 shrink-0 mt-px" />
+              )}
+              <span>
+                <strong className="font-semibold">{TIER_BADGE[verification.tier].short}</strong>
+                <span className="text-slate-300">
+                  {' · '}
+                  {verification.passed
+                    ? `검사 ${verification.checks.length}개 통과`
+                    : `검사 실패: ${verification.errors[0] ?? ''}`}
+                </span>
+              </span>
+            </div>
+          )}
+
           {/* Live Metrics Grid with full text visibility without awkward cuts */}
           <div className="grid grid-cols-2 gap-2">
             {metricEntries.map(([key, val]) => {
@@ -188,6 +222,13 @@ export const TelemetryDisplay: React.FC<TelemetryDisplayProps> = ({
                   )}
                 </div>
               ))}
+
+              {limitations && (
+                <div className="mt-1 p-2 rounded-lg bg-slate-900/90 border border-slate-800 text-[10px] text-slate-400 leading-relaxed">
+                  <span className="font-semibold text-slate-300">모델 한계 </span>
+                  {limitations}
+                </div>
+              )}
 
               {safetyNotes.length > 0 && (
                 <div className="mt-1 p-2 rounded-lg bg-amber-950/30 border border-amber-500/30 text-[10px] text-amber-200 flex items-start gap-1.5">

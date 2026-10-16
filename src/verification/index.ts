@@ -1,10 +1,25 @@
 import type { ExperimentSpec, UiComponent } from '../types';
 import { analyticFall, bodyFromVariables, paramsFromVariables, simulateFall } from '../engines/gravity';
 import { matchAllowedFormula, ALLOWED_FORMULAS } from './formulas';
-import type { CheckResult, VerificationReport } from './types';
+import { checkObservableFormulas, checkObservableResponse, defaultScope } from './observables';
+import { compileFormula } from '../lib/formulaEval';
+import { requiredVariablesFor } from '../generation/sceneCatalog';
+import { TIER_LABELS, ENGINE_SCENES } from './types';
+import type { CheckResult, VerificationReport, VerificationTier } from './types';
 
-export type { CheckResult, VerificationReport } from './types';
+export type { CheckResult, VerificationReport, VerificationTier } from './types';
+export { TIER_LABELS, ENGINE_SCENES } from './types';
 export { ALLOWED_FORMULAS, matchAllowedFormula, normalizeFormula } from './formulas';
+export { checkObservableFormulas, checkObservableResponse, defaultScope } from './observables';
+
+/**
+ * Which checks a spec can be held to. Only the free-fall lab has a real engine with a closed-form
+ * solution, so only it earns the strict tier; everything else is a declarative model.
+ */
+export function tierFor(spec: Pick<ExperimentSpec, 'sceneType'>): VerificationTier {
+  if (spec?.sceneType === 'gravity') return 'strict';
+  return (ENGINE_SCENES as readonly string[]).includes(spec?.sceneType) ? 'engine' : 'model';
+}
 
 const SCENE_TYPES = ['gravity', 'optics', 'fluid', 'volcano', 'solar_system', 'buoyancy', 'conceptual'];
 
@@ -104,6 +119,13 @@ export function checkRanges(spec: ExperimentSpec, values?: Record<string, number
   const vars = Array.isArray(spec.variables) ? spec.variables : [];
   if (spec.sceneType === 'gravity') {
     for (const id of GRAVITY_REQUIRED_VARS) if (!vars.some((v) => v.id === id)) errors.push(`중력 실험에 필요한 변수 ${id}가 없습니다`);
+  } else {
+    // A dedicated scene reads its inputs by fixed id; a missing one is a slider that moves nothing.
+    for (const id of requiredVariablesFor(spec.sceneType)) {
+      if (!vars.some((v) => v.id === id)) {
+        errors.push(`${spec.sceneType} 시뮬레이션이 읽는 변수 ${id}가 없습니다 — 이 이름을 그대로 써야 화면이 반응합니다`);
+      }
+    }
   }
   const outside = (lim: (typeof PHYSICAL_LIMITS)[string], x: number) => (lim.minExclusive ? x <= lim.min : x < lim.min) || x > lim.max;
   const rangeText = (lim: (typeof PHYSICAL_LIMITS)[string]) => `${lim.minExclusive ? '>' : '≥'} ${lim.min} 그리고 ≤ ${lim.max} ${lim.unit}`;
@@ -120,7 +142,7 @@ export function checkRanges(spec: ExperimentSpec, values?: Record<string, number
 }
 
 /** (c) Unit consistency for variables and observables. */
-export function checkUnits(spec: ExperimentSpec): CheckResult {
+export function checkUnits(spec: ExperimentSpec, tier: VerificationTier = tierFor(spec)): CheckResult {
   const errors: string[] = [];
   for (const v of spec.variables ?? []) {
     const lim = PHYSICAL_LIMITS[v.id];
@@ -128,11 +150,13 @@ export function checkUnits(spec: ExperimentSpec): CheckResult {
       errors.push(`${v.id}의 단위는 '${lim.unit}'이어야 하지만 '${v.unit}'입니다`);
     }
   }
-  for (const o of spec.observableOutputs ?? []) {
-    const u = normalizeUnit(o.unit);
-    if (/time/i.test(o.id) && u !== 's') errors.push(`${o.id}는 시간이므로 단위가 's'여야 하는데 '${o.unit}'입니다`);
-    if (/velocity|speed/i.test(o.id) && u !== 'm/s') errors.push(`${o.id}는 속도이므로 단위가 'm/s'여야 하는데 '${o.unit}'입니다`);
-    if (/height/i.test(o.id) && u !== 'm') errors.push(`${o.id}는 높이이므로 단위가 'm'여야 하는데 '${o.unit}'입니다`);
+  if (tier === 'strict') {
+    for (const o of spec.observableOutputs ?? []) {
+      const u = normalizeUnit(o.unit);
+      if (/time/i.test(o.id) && u !== 's') errors.push(`${o.id}는 시간이므로 단위가 's'여야 하는데 '${o.unit}'입니다`);
+      if (/velocity|speed/i.test(o.id) && u !== 'm/s') errors.push(`${o.id}는 속도이므로 단위가 'm/s'여야 하는데 '${o.unit}'입니다`);
+      if (/height/i.test(o.id) && u !== 'm') errors.push(`${o.id}는 높이이므로 단위가 'm'여야 하는데 '${o.unit}'입니다`);
+    }
   }
   return result('units', '단위 일관성', '변수와 관측량의 단위가 일관됩니다', errors);
 }
@@ -186,20 +210,38 @@ export function checkEngine(spec: ExperimentSpec, values?: Record<string, number
   return result('engine', '엔진 계산 vs 해석해', `최대 오차 ${(worst * 100).toFixed(4)}% (기준 1% 미만)`, errors);
 }
 
-/** Runs all five checks. Pure: no I/O, safe on both server and client. */
+/**
+ * Runs all five checks. Pure: no I/O, safe on both server and client.
+ *
+ * The last two depend on the tier. 'strict' (free fall) compares the engine against the closed-form
+ * solution and allow-lists every formula. 'model' (every other lab) instead proves that the
+ * observables are really computed from the spec's own controls: they must parse, stay finite across
+ * each slider's full range, and actually respond to it.
+ */
 export function verifyExperimentSpec(spec: ExperimentSpec, values?: Record<string, number>): VerificationReport {
+  const tier = tierFor(spec);
   const schema = checkSchema(spec);
   const checks: CheckResult[] = [schema];
   if (schema.passed) {
-    checks.push(checkRanges(spec, values), checkUnits(spec), checkFormulas(spec), checkEngine(spec, values));
+    checks.push(
+      checkRanges(spec, values),
+      checkUnits(spec, tier),
+      tier === 'strict' ? checkFormulas(spec) : checkObservableFormulas(spec, tier === 'model'),
+      tier === 'strict' ? checkEngine(spec, values) : checkObservableResponse(spec, tier === 'model'),
+    );
   } else {
     const skipped = (id: CheckResult['id'], label: string): CheckResult => ({
       id, label, passed: false, message: '스키마 검사 실패로 실행하지 못했습니다', errors: ['스키마 검사 실패로 실행하지 못했습니다'],
     });
-    checks.push(skipped('ranges', '변수 범위의 물리적 타당성'), skipped('units', '단위 일관성'), skipped('formulas', '공식 허용 목록'), skipped('engine', '엔진 계산 vs 해석해'));
+    checks.push(
+      skipped('ranges', '변수 범위의 물리적 타당성'),
+      skipped('units', '단위 일관성'),
+      skipped('formulas', tier === 'strict' ? '공식 허용 목록' : '관측값 수식의 계산 가능성'),
+      skipped('engine', tier === 'strict' ? '엔진 계산 vs 해석해' : '관측값의 변수 반응성'),
+    );
   }
   const errors = checks.filter((c) => !c.passed && c.message !== '스키마 검사 실패로 실행하지 못했습니다').flatMap((c) => c.errors);
-  return { checks, passed: checks.every((c) => c.passed), errors };
+  return { checks, passed: checks.every((c) => c.passed), errors, tier, tierLabel: TIER_LABELS[tier] };
 }
 
 /**
@@ -225,9 +267,22 @@ export function validateVariableUpdates(
     accepted[id] = raw;
   }
   if (Object.keys(accepted).length > 0) {
-    const merged = { ...Object.fromEntries(spec.variables.map((x) => [x.id, x.default])), ...accepted };
-    const engine = checkEngine(spec, merged);
-    if (!engine.passed) errors.push(...engine.errors);
+    const merged = { ...defaultScope(spec), ...accepted };
+    if (tierFor(spec) === 'strict') {
+      const engine = checkEngine(spec, merged);
+      if (!engine.passed) errors.push(...engine.errors);
+    } else {
+      for (const o of spec.observableOutputs ?? []) {
+        if (!o.formula) continue;
+        const compiled = compileFormula(o.formula);
+        if (!compiled.ok) continue;
+        try {
+          compiled.formula.evaluate(merged);
+        } catch (err: any) {
+          errors.push(`제안한 값에서 '${o.label || o.id}'를 계산할 수 없습니다: ${err?.message ?? '오류'}`);
+        }
+      }
+    }
   }
   return { ok: errors.length === 0, errors, accepted };
 }

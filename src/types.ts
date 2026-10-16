@@ -35,8 +35,11 @@ export interface ObservableOutput {
   id: string;
   label: string;
   unit: string;
+  /** Arithmetic expression over this spec's variable ids; evaluated to produce the live readout. */
   formula?: string;
   description: string;
+  /** Fixed decimal places for display; omitted lets the formatter choose by magnitude. */
+  decimals?: number;
 }
 
 export interface ScientificPrinciple {

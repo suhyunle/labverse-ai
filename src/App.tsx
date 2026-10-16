@@ -112,9 +112,10 @@ export default function App() {
     });
   }, []);
 
-  // Real verification of the active experiment against the current variable values.
+  // Real verification of the active experiment against the current variable values. Every tier is
+  // re-checked in the browser, not just free fall, so the HUD can state what was actually proved.
   const verification = useMemo(
-    () => (currentExperiment?.sceneType === 'gravity' ? verifyExperimentSpec(currentExperiment, variables) : null),
+    () => (currentExperiment ? verifyExperimentSpec(currentExperiment, variables) : null),
     [currentExperiment, variables],
   );
 
@@ -368,7 +369,11 @@ export default function App() {
 
             {currentExperiment.sceneType === 'conceptual' && (
               <ConceptualSimulation
+                key={currentExperiment.id}
                 variables={variables}
+                variableSpecs={currentExperiment.variables}
+                observables={currentExperiment.observableOutputs}
+                domain={currentExperiment.domain}
                 cameraPreset={cameraPreset}
                 onUpdateMetrics={handleUpdateMetrics}
               />
@@ -382,6 +387,8 @@ export default function App() {
             observableSpecs={currentExperiment.observableOutputs}
             principles={currentExperiment.scientificPrinciples}
             safetyNotes={currentExperiment.safetyNotes}
+            verification={verification}
+            limitations={currentExperiment.limitations}
           />
           )}
 

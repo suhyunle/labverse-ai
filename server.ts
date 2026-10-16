@@ -4,7 +4,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { buildGravityPresetSpec, normalizeGravitySpec, GRAVITY_VARIABLE_CATALOG } from './src/generation/gravitySpec';
-import { verifyExperimentSpec, validateVariableUpdates, ALLOWED_FORMULAS } from './src/verification';
+import { normalizeLabSpec } from './src/generation/labSpec';
+import { ENGINE_SCENE_LIST, describeSceneCatalog } from './src/generation/sceneCatalog';
+import { verifyExperimentSpec, validateVariableUpdates, ALLOWED_FORMULAS, tierFor } from './src/verification';
+import { FORMULA_FUNCTIONS } from './src/lib/formulaEval';
 
 dotenv.config();
 
@@ -392,12 +395,81 @@ Rules:
 - observables: [{ "id", "label", "unit" }] with ids from fallTimeA, fallTimeB, impactVelocityA, impactVelocityB, vacuumFallTime; unit "s" for times and "m/s" for speeds.
 - uiComponents: a tree of { "type": "group", "title", "children": [...] }, { "type": "slider", "variableId" } and { "type": "preset_buttons", "options": [{ "label", "values": { "<variableId>": number } }] }. Every variableId must be in variables and every preset value inside that variable's min..max.
 - All human-readable text in natural Korean. Keep it short: 2-3 learningObjectives, 2-3 guidedSteps.
-- If the request is NOT about free fall / gravity / falling bodies / air drag, reply exactly {"unsupported": true, "reason": "<Korean one-liner>"}.
+- Set "sceneType": "gravity".
 ${paperBlock}${retryBlock}
 User request: "${query}"
 
 JSON shape:
-{ "title": string, "learningObjectives": [string], "variables": [{ "id", "label", "min", "max", "default", "step", "unit", "description" }], "observables": [{ "id", "label", "unit" }], "formulas": [string], "uiComponents": [...], "explanation": string, "guidedSteps": [{ "title", "instruction" }], "limitations": string }`;
+{ "sceneType": "gravity", "title": string, "learningObjectives": [string], "variables": [{ "id", "label", "min", "max", "default", "step", "unit", "description" }], "observables": [{ "id", "label", "unit" }], "formulas": [string], "uiComponents": [...], "explanation": string, "guidedSteps": [{ "title", "instruction" }], "limitations": string }`;
+}
+
+/**
+ * Lane B: every topic that is not free fall. There is no engine for these, so the readouts ARE the
+ * spec: each observable carries an arithmetic formula over the lab's own variable ids, which the
+ * browser evaluates every frame and verification sweeps across each slider's range. A lab whose
+ * panel ignores its controls fails verification, so the rules below are not stylistic.
+ */
+function buildGeneralPrompt(query: string, paper: any, previousErrors: string[]) {
+  const fns = Object.keys(FORMULA_FUNCTIONS).join(', ');
+  const paperBlock = paper?.title
+    ? `\nThe lab illustrates this REAL paper (do not invent anything beyond it):\nTitle: ${paper.title}\nDOI: ${paper.doi ?? 'n/a'}\nResearch question: ${paper.researchQuestion ?? 'not stated'}\n`
+    : '';
+  const retryBlock = previousErrors.length
+    ? `\nYour previous output FAILED automatic verification with these exact errors. Fix every one:\n${previousErrors.map((e) => `- ${e}`).join('\n')}\n`
+    : '';
+  const sceneContracts = ENGINE_SCENE_LIST.map((sc) => `- "${sc}" requires exactly these variable ids:\n${describeSceneCatalog(sc)}`).join('\n');
+  return `You design an interactive science lab for LabVerse AI. Reply with compact JSON only (no prose).
+
+Pick "sceneType" from the dedicated 3D scenes when the topic really is one of them, else "conceptual":
+- "volcano" (magma chamber pressure, eruption dynamics)
+- "optics" (refraction, Snell's law, total internal reflection)
+- "fluid" (immiscible layers, density columns)
+- "solar_system" (orbital mechanics, Kepler, tides)
+- "buoyancy" (floating, sinking, displaced volume)
+- "conceptual" (everything else: chemistry, biology, thermodynamics, materials, ...)
+
+A dedicated scene is hand-written code that reads its inputs by FIXED id. If you choose one, you MUST
+declare those exact variable ids (you may add extra variables, and you may re-label them in Korean,
+but the ids and units must match or the 3D view will not respond):
+${sceneContracts}
+Choosing "conceptual" instead is always acceptable and often better: there YOU define the variables
+and every readout is one of your formulas.
+
+THE READOUTS ARE COMPUTED FROM YOUR FORMULAS. These rules are verified automatically:
+- Every observable MUST have "formula": an arithmetic expression over YOUR OWN variable ids.
+- Variable ids: ASCII identifiers only (letters, digits, underscore), e.g. "acidConcentration". Korean goes in "label".
+- Every variable you declare MUST be read by at least one observable formula. A slider nothing reads is rejected.
+- Every observable MUST change when at least one of its variables moves. A constant readout is rejected.
+- The formula must stay finite across each slider's FULL min..max range. Never divide by a variable whose range includes 0, and never take sqrt/ln of an expression that can go negative there — set min accordingly or use max(x, small).
+- Do NOT let min()/max()/clamp() sit saturated across a slider's whole range. If an observable reads a variable, moving that variable must visibly change the number — a readout pegged at its cap is rejected. Scale the coefficients to the ranges you chose.
+- Allowed in formulas: numbers, your variable ids, + - * / ^ ( ), the constants pi and e, and these functions: ${fns}. Nothing else. No units, no text, no Korean inside the formula.
+- Choose observables that match the TOPIC and that your missions actually refer to. If a mission says to watch a quantity, that quantity must be one of the observables.
+- "unit" is the display unit (may be empty). "decimals" optional (0-4).
+
+Scientific accuracy matters more than drama:
+- Do not exaggerate magnitudes or hazards. Model the mechanism that genuinely dominates for the SPECIFIC substance or system named, with magnitudes that are realistic for it — do not borrow the dramatic numbers of a related but different case (e.g. concentrated sulfuric acid's heat of dilution is large, hydrochloric acid's is much smaller and its dominant hazard is corrosive HCl vapour).
+- Put real cautions in "safetyNotes" and real model limits in "limitations".
+- All human-readable text in natural Korean: label, description, title, explanation, missions. Keep it tight: 2-3 learningObjectives, 3 guidedSteps, 3-5 variables, 3-5 observables.
+- "formulas" is a list of display equations (LaTeX allowed) shown to the student; they are labelled as illustrative, not machine-checked.
+- uiComponents: a tree of { "type": "group", "title", "children": [...] }, { "type": "slider", "variableId" } and { "type": "preset_buttons", "options": [{ "label", "values": { "<variableId>": number } }] }. Every variableId must exist and every preset value must sit inside that variable's min..max.
+${paperBlock}${retryBlock}
+User request: "${query}"
+
+JSON shape:
+{ "sceneType": string, "domain": string, "title": string, "learningObjectives": [string], "variables": [{ "id", "label", "min", "max", "default", "step", "unit", "description", "category" }], "observables": [{ "id", "label", "unit", "formula", "description", "decimals" }], "formulas": [string], "scientificPrinciples": [{ "name", "description", "formula" }], "uiComponents": [...], "explanation": string, "guidedSteps": [{ "title", "instruction" }], "safetyNotes": [string], "limitations": string }`;
+}
+
+/** True when the request is about free fall, which is the only lane with a strict engine. */
+async function isGravityQuery(query: string): Promise<boolean> {
+  try {
+    const { data } = await generateJson(
+      `Does this request ask about free fall, falling bodies, gravity-driven drop, air drag on a falling object, or Galileo's experiment? Reply JSON {"gravity": true|false}.\nRequest: "${query}"`,
+      { models: [LITE_MODEL], timeoutMs: 8000 },
+    );
+    return data?.gravity === true;
+  } catch {
+    return /자유\s*낙하|낙하|떨어|중력|갈릴레|free\s*fall|gravity|drag/i.test(query);
+  }
 }
 
 app.post('/api/plan-experiment', async (req: Request, res: Response) => {
@@ -427,33 +499,59 @@ app.post('/api/plan-experiment', async (req: Request, res: Response) => {
       return;
     }
 
+    const trimmedQuery = query.trim().slice(0, 500);
+
+    // Free fall is the only topic with a strict engine; routing first keeps that lane's prompt
+    // (exact variable catalogue, allow-listed formulas) intact instead of diluting it.
+    let lane: 'gravity' | 'general' = 'gravity';
+    if (!paperContext) {
+      emit({ type: 'step', step: 'route' });
+      lane = (await isGravityQuery(trimmedQuery)) ? 'gravity' : 'general';
+    }
+    emit({ type: 'step', step: 'lane', lane });
+
     let errors: string[] = [];
     let lastReport: ReturnType<typeof verifyExperimentSpec> | null = null;
     for (let attempt = 0; attempt <= MAX_GENERATION_RETRIES; attempt++) {
       emit({ type: 'step', step: 'generate', attempt: attempt + 1, maxAttempts: MAX_GENERATION_RETRIES + 1 });
       let raw: any;
       let model: string;
+      const prompt = lane === 'gravity'
+        ? buildGravityPrompt(trimmedQuery, paperContext, errors)
+        : buildGeneralPrompt(trimmedQuery, paperContext, errors);
       try {
-        ({ data: raw, model } = await generateJson(buildGravityPrompt(query.trim().slice(0, 500), paperContext, errors)));
+        ({ data: raw, model } = await generateJson(prompt));
       } catch (err: any) {
-        const { spec, report } = preset();
-        emit({ type: 'done', experiment: spec, verification: report, source: 'preset', notice: `AI 생성에 실패해 기본 자유 낙하 실험을 불러왔습니다 (${err?.message || '알 수 없는 오류'}).`, attempts: attempt + 1, ms: Date.now() - started });
+        if (lane === 'gravity') {
+          const { spec, report } = preset();
+          emit({ type: 'done', experiment: spec, verification: report, source: 'preset', notice: `AI 생성에 실패해 기본 자유 낙하 실험을 불러왔습니다 (${err?.message || '알 수 없는 오류'}).`, attempts: attempt + 1, ms: Date.now() - started });
+        } else {
+          emit({ type: 'error', code: 'generation_failed', message: `실험 생성에 실패했습니다 (${err?.message || '알 수 없는 오류'}).` });
+        }
         res.end();
         return;
       }
 
+      // The gravity prompt bails out on off-topic requests; that is a routing miss, not a dead end.
       if (raw?.unsupported) {
-        emit({ type: 'error', code: 'unsupported', message: `현재 버전은 자유 낙하 실험만 지원합니다. ${typeof raw.reason === 'string' ? raw.reason : ''}`.trim() });
+        if (lane === 'gravity') {
+          lane = 'general';
+          errors = [];
+          emit({ type: 'step', step: 'lane', lane });
+          attempt--;
+          continue;
+        }
+        emit({ type: 'error', code: 'unsupported', message: `실험으로 만들 수 없는 요청입니다. ${typeof raw.reason === 'string' ? raw.reason : ''}`.trim() });
         res.end();
         return;
       }
 
       emit({ type: 'step', step: 'verify', attempt: attempt + 1, model });
-      const spec = normalizeGravitySpec(raw);
+      const spec = raw?.sceneType === 'gravity' && lane === 'gravity' ? normalizeGravitySpec(raw) : normalizeLabSpec(raw);
       const report = verifyExperimentSpec(spec);
       lastReport = report;
       if (report.passed) {
-        emit({ type: 'done', experiment: spec, verification: report, source: 'ai', model, attempts: attempt + 1, ms: Date.now() - started });
+        emit({ type: 'done', experiment: spec, verification: report, source: 'ai', model, tier: report.tier, attempts: attempt + 1, ms: Date.now() - started });
         res.end();
         return;
       }
@@ -461,8 +559,18 @@ app.post('/api/plan-experiment', async (req: Request, res: Response) => {
       if (attempt < MAX_GENERATION_RETRIES) emit({ type: 'retry', attempt: attempt + 1, errors });
     }
 
-    const { spec, report } = preset();
-    emit({ type: 'done', experiment: spec, verification: report, source: 'preset', notice: `AI가 ${MAX_GENERATION_RETRIES + 1}회 시도했지만 검증을 통과하지 못해 기본 자유 낙하 실험을 불러왔습니다. 마지막 오류: ${(lastReport?.errors ?? []).slice(0, 3).join(' / ')}`, attempts: MAX_GENERATION_RETRIES + 1, ms: Date.now() - started });
+    // Nothing verified. Showing a free-fall lab for a chemistry question would be a lie, so only the
+    // gravity lane falls back to its preset; otherwise report why, with the checker's own words.
+    if (lane === 'gravity') {
+      const { spec, report } = preset();
+      emit({ type: 'done', experiment: spec, verification: report, source: 'preset', notice: `AI가 ${MAX_GENERATION_RETRIES + 1}회 시도했지만 검증을 통과하지 못해 기본 자유 낙하 실험을 불러왔습니다. 마지막 오류: ${(lastReport?.errors ?? []).slice(0, 3).join(' / ')}`, attempts: MAX_GENERATION_RETRIES + 1, ms: Date.now() - started });
+    } else {
+      emit({
+        type: 'error',
+        code: 'verification_failed',
+        message: `생성된 실험이 ${MAX_GENERATION_RETRIES + 1}회 모두 검증을 통과하지 못했습니다. 검증되지 않은 실험은 보여 주지 않습니다. 사유: ${(lastReport?.errors ?? []).slice(0, 3).join(' / ')}`,
+      });
+    }
     res.end();
   } catch (err: any) {
     console.error('Plan experiment error:', err);
