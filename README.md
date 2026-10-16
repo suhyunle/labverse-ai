@@ -1,6 +1,7 @@
 # LabVerse AI
 
 ### From paper to experiment — an AI science lab with explicit verification
+<img width="2752" height="1686" alt="image" src="https://github.com/user-attachments/assets/a8c22ebc-e7a0-41ee-9fe7-74e3a399111d" />
 
 **Turn a science question or a real research paper into an interactive lab where you can change variables, observe results, and explore what happens next.**
 
@@ -53,6 +54,9 @@ AI generation and Dr. Nova require a valid key and model IDs accessible to your 
 ```bash
 npm run dev
 ```
+
+<img width="1448" height="1086" alt="image" src="https://github.com/user-attachments/assets/206df3b6-9d79-4fa3-8a03-1b90a554a914" />
+
 
 Open [http://localhost:3000](http://localhost:3000). Express serves the API and Vite development middleware together, so there is no separate frontend server to start.
 
