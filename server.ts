@@ -30,6 +30,45 @@ const ai = new GoogleGenAI({
   },
 });
 
+
+// Gemini model selection comes from the environment; defaults follow the project spec.
+const PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-4-argon';
+const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.8-flash';
+const LITE_MODEL = process.env.GEMINI_LITE_MODEL || 'gemini-3.1-flash-lite'; // quick utility calls (query translation)
+const GEMINI_TIMEOUT_MS = 15000;
+
+/**
+ * Calls Gemini for strict JSON. Primary model gets a 15 s AbortController timeout, then the
+ * fallback model is tried. Throws (never fabricates) when no key is set or both attempts fail.
+ */
+async function generateJson(
+  prompt: string,
+  opts: { timeoutMs?: number; models?: string[] } = {},
+): Promise<{ data: any; model: string }> {
+  if (!apiKey) throw new Error('GEMINI_API_KEY가 설정되지 않았습니다');
+  const models = opts.models ?? (PRIMARY_MODEL === FALLBACK_MODEL ? [PRIMARY_MODEL] : [PRIMARY_MODEL, FALLBACK_MODEL]);
+  let lastErr: any;
+  for (const model of models) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? GEMINI_TIMEOUT_MS);
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: { responseMimeType: 'application/json', abortSignal: ctrl.signal },
+      });
+      const cleaned = (response.text || '').trim().replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+      return { data: JSON.parse(cleaned), model };
+    } catch (err: any) {
+      lastErr = ctrl.signal.aborted ? new Error(`${model} 응답 시간 초과`) : err;
+      console.warn(`Gemini call failed on ${model}:`, lastErr?.message);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr ?? new Error('Gemini 호출 실패');
+}
+
 // Predefined verified templates for instant high-speed fallback & seed matching
 const PRESET_EXPERIMENTS: Record<string, any> = {
   gravity: {
@@ -91,18 +130,6 @@ const PRESET_EXPERIMENTS: Record<string, any> = {
       '달 표면에서 깃털과 쇠구슬을 떨어뜨리면 어떻게 돼?',
       '목성의 거대 중력에서 낙하 속도는 얼마나 빨라질까?',
     ],
-    citations: [
-      {
-        title: 'Discourses and Mathematical Demonstrations Relating to Two New Sciences',
-        authors: ['Galileo Galilei'],
-        year: 1638,
-        journalOrConference: 'Elsevier / Low Countries Academic Press',
-        doi: '10.1038/scientificamerican1973-104',
-        url: 'https://archive.org/details/dialoguesconcern00galiuoft',
-        relevance: '진공 자유 낙하 가속도 불변성의 최초 정립 문헌',
-        verified: true,
-      },
-    ],
   },
   optics: {
     id: 'exp-optics-snell',
@@ -160,18 +187,6 @@ const PRESET_EXPERIMENTS: Record<string, any> = {
       '입사각을 50도로 올려서 전반사를 보여줘',
       '다이아몬드와 공기 경계면의 임계각은 얼마야?',
       '광섬유 통신은 이 원리를 어떻게 사용해?',
-    ],
-    citations: [
-      {
-        title: 'The Feynman Lectures on Physics: Optics - The Principle of Least Time',
-        authors: ['Richard Feynman', 'Robert Leighton', 'Matthew Sands'],
-        year: 1963,
-        journalOrConference: 'Caltech / Addison-Wesley',
-        doi: '10.1119/1.1975977',
-        url: 'https://www.feynmanlectures.caltech.edu/I_26.html',
-        relevance: '페르마의 원리와 스넬 법칙의 양자역학적 해석',
-        verified: true,
-      },
     ],
   },
   fluid: {
@@ -402,9 +417,10 @@ For volcano experiments:
   }
 });
 
-// 2. Paper-to-Lab API: real paper metadata via Crossref (DOI) and OpenAlex (search).
-// No paper data is hardcoded; every citation links to https://doi.org/{doi}.
-// Evidence level: 'abstract' when an abstract was retrieved, otherwise 'metadata' (title/authors/venue only).
+// 2. Paper-to-Lab API: real paper metadata via Crossref (DOI) and OpenAlex (search); Gemini only
+// structures the REAL abstract. No paper data is hardcoded; there is no fake fallback.
+// Every citation links to https://doi.org/{doi}. Evidence level: 'abstract' when an abstract was
+// retrieved, otherwise 'metadata' (title/authors/venue only).
 const SCHOLAR_UA = 'labverse-ai/1.0 (mailto:sksuhyun@gmail.com)';
 const DOI_PATTERN = /10\.\d{4,9}\/[^\s"<>]+/i;
 
@@ -448,29 +464,92 @@ function buildCitation(meta: { title: string; authors: string[]; year: number | 
   return `${authors || 'Unknown authors'}${meta.year ? ` (${meta.year})` : ''}. ${meta.title}. ${meta.journalOrSource ? meta.journalOrSource + '. ' : ''}${doiUrl(meta.doi)}`;
 }
 
-// Maps a paper's real text onto the closest built-in simulation. Returns null when nothing matches
-// rather than defaulting to an unrelated preset.
-function matchPresetFromText(text: string): { presetId: string; spec: any } | null {
-  const t = text.toLowerCase();
-  const rules: [string, RegExp][] = [
-    ['gravity', /free[- ]fall|gravitational acceleration|falling bod|galile/],
-    ['optics', /refraction|snell|total internal reflection|refractive index/],
-    ['fluid', /buoyan|archimed|density stratif|hydrostatic|immiscible/],
-    ['volcano', /volcan|magma|eruption/],
-    ['solar_system', /solar system|planetary orbit|tidal force|orbital mechanics/],
-  ];
-  for (const [presetId, re] of rules) {
-    if (re.test(t) && PRESET_EXPERIMENTS[presetId]) return { presetId, spec: PRESET_EXPERIMENTS[presetId] };
-  }
-  return null;
-}
-
-function buildAnalysis(meta: {
+interface PaperMeta {
   title: string; authors: string[]; year: number | null; journalOrSource: string; doi: string;
   abstract: string; source: 'crossref' | 'openalex'; subjects: string[];
-}) {
+}
+
+interface PaperExtraction {
+  researchQuestion: string | null;
+  hypothesis: string | null;
+  variables: { name: string; symbol: string | null; unit: string | null; role: 'independent' | 'dependent' | 'control' | 'unspecified' }[];
+  formulas: string[];
+  limitations: string[];
+  supportedEngine: 'gravity' | 'none';
+}
+
+const asStr = (x: unknown): string | null => (typeof x === 'string' && x.trim() ? x.trim() : null);
+const asStrArr = (x: unknown): string[] => (Array.isArray(x) ? x.map(asStr).filter((s): s is string => !!s) : []);
+
+function normalizeExtraction(raw: any): PaperExtraction {
+  const roles = ['independent', 'dependent', 'control', 'unspecified'];
+  return {
+    researchQuestion: asStr(raw?.researchQuestion),
+    hypothesis: asStr(raw?.hypothesis),
+    variables: (Array.isArray(raw?.variables) ? raw.variables : [])
+      .filter((v: any) => asStr(v?.name))
+      .slice(0, 12)
+      .map((v: any) => ({
+        name: asStr(v.name) as string,
+        symbol: asStr(v.symbol),
+        unit: asStr(v.unit),
+        role: roles.includes(v.role) ? v.role : 'unspecified',
+      })),
+    formulas: asStrArr(raw?.formulas).slice(0, 10),
+    limitations: asStrArr(raw?.limitations).slice(0, 8),
+    supportedEngine: raw?.supportedEngine === 'gravity' ? 'gravity' : 'none',
+  };
+}
+
+async function extractFromAbstract(meta: PaperMeta) {
+  const prompt = `You structure information from ONE real scientific paper for a physics-education app.
+Use ONLY the title and abstract below. Do NOT add facts, numbers, formulas or limitations that the text does not state or directly imply.
+If something is not stated, return null (or an empty array). Write Korean for free-text fields; keep symbols and formulas as written.
+
+TITLE: ${meta.title}
+AUTHORS: ${meta.authors.slice(0, 6).join(', ')}
+YEAR: ${meta.year ?? 'unknown'}
+VENUE: ${meta.journalOrSource || 'unknown'}
+ABSTRACT:
+${meta.abstract}
+
+"supportedEngine" must be "gravity" only if the paper is about free fall / gravitational acceleration / falling bodies (with or without air drag) so that a vacuum-vs-air free-fall simulator is a fair illustration; otherwise "none".
+
+Return strictly this JSON:
+{
+  "researchQuestion": string | null,
+  "hypothesis": string | null,
+  "variables": [{ "name": string, "symbol": string | null, "unit": string | null, "role": "independent" | "dependent" | "control" | "unspecified" }],
+  "formulas": [string],
+  "limitations": [string],
+  "supportedEngine": "gravity" | "none"
+}`;
+  const { data, model } = await generateJson(prompt);
+  return { extraction: normalizeExtraction(data), model };
+}
+
+async function buildAnalysis(meta: PaperMeta) {
   const evidenceLevel = meta.abstract ? 'abstract' : 'metadata';
-  const mapping = matchPresetFromText(`${meta.title} ${meta.abstract} ${meta.subjects.join(' ')}`);
+  let extraction: PaperExtraction | null = null;
+  let extractionStatus: 'ok' | 'no_abstract' | 'unavailable' = 'no_abstract';
+  let extractionNote = '초록이 없어(메타데이터만 확인) 연구 질문·가설을 추출하지 않았습니다.';
+  let extractionModel: string | null = null;
+
+  if (meta.abstract) {
+    try {
+      const r = await extractFromAbstract(meta);
+      extraction = r.extraction;
+      extractionModel = r.model;
+      extractionStatus = 'ok';
+      extractionNote = '초록에 근거해 Gemini가 구조화했습니다. 본문은 확인하지 않았습니다.';
+    } catch (err: any) {
+      console.warn('Paper extraction failed:', err?.message);
+      extractionStatus = 'unavailable';
+      extractionNote = `AI 추출에 실패했습니다 (${err?.message || '알 수 없는 오류'}). 아래 서지 정보와 초록 원문만 표시합니다.`;
+    }
+  }
+
+  const useGravity = extraction?.supportedEngine === 'gravity';
   return {
     paperMetadata: {
       title: meta.title,
@@ -492,31 +571,27 @@ function buildAnalysis(meta: {
       source: meta.source === 'crossref' ? 'Crossref' : 'OpenAlex',
     },
     citations: [
-      {
-        text: buildCitation(meta),
-        doi: meta.doi,
-        url: doiUrl(meta.doi),
-        evidenceLevel,
-      },
+      { text: buildCitation(meta), doi: meta.doi, url: doiUrl(meta.doi), evidenceLevel },
     ],
-    experimentSpec: mapping?.spec ?? null,
-    experimentMapping: mapping
-      ? {
-          presetId: mapping.presetId,
-          basis: '제목·초록·분야 키워드 일치에 따른 근사 매핑 (논문의 실제 실험 재현이 아님)',
-        }
+    extraction,
+    extractionStatus,
+    extractionNote,
+    extractionModel,
+    experimentSpec: useGravity ? PRESET_EXPERIMENTS.gravity : null,
+    experimentMapping: useGravity
+      ? { engine: 'gravity', basis: 'AI가 초록에서 자유 낙하 주제로 판단했습니다. 낙하 시뮬레이터는 논문의 실험을 재현하는 것이 아니라 개념을 보여주는 도구입니다.' }
       : null,
   };
 }
 
-async function lookupCrossref(doi: string) {
+async function lookupCrossref(doi: string): Promise<PaperMeta> {
   const data = await fetchJson(`https://api.crossref.org/works/${encodeURIComponent(doi)}`);
   const w = data.message;
   const authors = (w.author || [])
     .map((a: any) => [a.given, a.family].filter(Boolean).join(' ') || a.name)
     .filter(Boolean);
   const dateParts = (w.issued || w.published || w['published-print'] || w['published-online'])?.['date-parts']?.[0];
-  return buildAnalysis({
+  return {
     title: stripTags((w.title && w.title[0]) || ''),
     authors,
     year: dateParts?.[0] ?? null,
@@ -525,7 +600,7 @@ async function lookupCrossref(doi: string) {
     abstract: w.abstract ? stripTags(w.abstract).replace(/^abstract\s*/i, '') : '',
     source: 'crossref',
     subjects: w.subject || [],
-  });
+  };
 }
 
 // Crossref often lacks abstracts; OpenAlex frequently has them. Used to upgrade evidence level.
@@ -538,8 +613,22 @@ async function fetchOpenAlexAbstract(doi: string): Promise<string> {
   }
 }
 
+// OpenAlex full-text search works best in English; translate Korean questions when Gemini is available.
+async function toSearchQuery(q: string): Promise<string> {
+  if (!/[가-힣]/.test(q) || !apiKey) return q;
+  try {
+    const { data } = await generateJson(
+      `Convert this question into a concise English academic search query (4-10 keywords, no punctuation). Return JSON {"query": string}.\nQuestion: ${q}`,
+      { timeoutMs: 8000, models: [LITE_MODEL, FALLBACK_MODEL] },
+    );
+    return asStr(data?.query) || q;
+  } catch {
+    return q;
+  }
+}
+
 async function searchOpenAlex(q: string) {
-  const url = `https://api.openalex.org/works?search=${encodeURIComponent(q)}&per-page=8&filter=has_doi:true&select=id,doi,title,publication_year,authorships,primary_location,abstract_inverted_index,topics`;
+  const url = `https://api.openalex.org/works?search=${encodeURIComponent(q)}&per_page=5&filter=has_doi:true&select=id,doi,title,publication_year,authorships,primary_location,abstract_inverted_index`;
   const data = await fetchJson(url);
   return (data.results || [])
     .filter((w: any) => w.doi && w.title)
@@ -572,24 +661,28 @@ app.post('/api/paper-to-lab', async (req: Request, res: Response) => {
 
     const foundDoi = extractDoi(inputStr);
     if (foundDoi) {
-      const analysis = await lookupCrossref(foundDoi);
-      if (!analysis.abstract) {
+      const meta = await lookupCrossref(foundDoi);
+      if (!meta.abstract) {
         const abs = await fetchOpenAlexAbstract(foundDoi);
-        if (abs) return res.json({ paperAnalysis: buildAnalysis({ ...analysis.paperMetadata, abstract: abs, source: 'openalex', subjects: analysis.subjects }) });
+        if (abs) {
+          meta.abstract = abs;
+          meta.source = 'openalex';
+        }
       }
-      res.json({ paperAnalysis: analysis });
+      res.json({ paperAnalysis: await buildAnalysis(meta) });
       return;
     }
 
-    const candidates = await searchOpenAlex(inputStr);
-    res.json({ candidates, source: 'OpenAlex' });
+    const searchQuery = await toSearchQuery(inputStr);
+    const candidates = await searchOpenAlex(searchQuery);
+    res.json({ candidates, searchQuery, source: 'OpenAlex' });
   } catch (err: any) {
     console.error('Paper to lab error:', err);
     if (err?.status === 404) {
       res.status(404).json({ error: 'DOI를 Crossref에서 찾을 수 없습니다.' });
       return;
     }
-    res.status(502).json({ error: 'Failed to fetch paper data', details: err?.message });
+    res.status(502).json({ error: '논문 데이터를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.', details: err?.message });
   }
 });
 

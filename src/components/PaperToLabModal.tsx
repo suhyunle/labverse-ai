@@ -19,6 +19,7 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
   const [paperResult, setPaperResult] = useState<any | null>(null);
   const [candidates, setCandidates] = useState<any[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   if (!isOpen) return null;
 
@@ -49,7 +50,8 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
       } else if (Array.isArray(data.candidates)) {
         setPaperResult(null);
         setCandidates(data.candidates);
-        if (data.candidates.length === 0) setErrorMsg('검색 결과가 없습니다.');
+        setSearchQuery(data.searchQuery || '');
+        if (data.candidates.length === 0) setErrorMsg('관련 논문을 찾지 못했습니다.');
       }
     } catch (err) {
       console.error('Paper to lab error:', err);
@@ -140,7 +142,7 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
           {/* OpenAlex search candidates */}
           {candidates.length > 0 && (
             <div className="space-y-1.5">
-              <span className="text-[11px] text-slate-400 font-mono">OpenAlex 검색 결과 (선택하면 Crossref로 상세 조회):</span>
+              <span className="text-[11px] text-slate-400 font-mono">OpenAlex 검색 결과{searchQuery ? ` (검색어: ${searchQuery})` : ''} — 하나를 선택하면 Crossref로 상세 조회합니다:</span>
               {candidates.map((c) => (
                 <div
                   key={c.doi}
@@ -210,6 +212,41 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
                 </div>
               )}
 
+              {/* AI-structured extraction (from the real abstract only) */}
+              <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-2">
+                <div className="font-bold text-[11px] text-indigo-300">
+                  논문 구조화 {paperResult.extractionModel ? `(Gemini · ${paperResult.extractionModel})` : ''}
+                </div>
+                <p className="text-[11px] text-slate-400">{paperResult.extractionNote}</p>
+                {paperResult.extraction && (
+                  <div className="space-y-2 text-[11px] text-slate-300 leading-relaxed">
+                    <div><strong className="text-cyan-300">연구 질문: </strong>{paperResult.extraction.researchQuestion ?? '초록에 명시되지 않음'}</div>
+                    <div><strong className="text-cyan-300">가설: </strong>{paperResult.extraction.hypothesis ?? '초록에 명시되지 않음'}</div>
+                    {paperResult.extraction.variables.length > 0 && (
+                      <div>
+                        <strong className="text-cyan-300">변수: </strong>
+                        <ul className="list-disc ml-4">
+                          {paperResult.extraction.variables.map((v: any, i: number) => (
+                            <li key={i}>
+                              {v.name}{v.symbol ? ` (${v.symbol})` : ''}{v.unit ? ` [${v.unit}]` : ''} — {({ independent: '독립', dependent: '종속', control: '통제', unspecified: '역할 미상' } as Record<string, string>)[v.role]}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {paperResult.extraction.formulas.length > 0 && (
+                      <div><strong className="text-cyan-300">공식: </strong><span className="font-mono">{paperResult.extraction.formulas.join(' · ')}</span></div>
+                    )}
+                    {paperResult.extraction.limitations.length > 0 && (
+                      <div>
+                        <strong className="text-cyan-300">한계: </strong>
+                        <ul className="list-disc ml-4">{paperResult.extraction.limitations.map((l: string, i: number) => <li key={i}>{l}</li>)}</ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Citations */}
               <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
                 <div className="font-bold text-[11px] text-cyan-300">인용:</div>
@@ -226,11 +263,11 @@ export const PaperToLabModal: React.FC<PaperToLabModalProps> = ({
 
               {paperResult.experimentMapping ? (
                 <div className="p-2.5 rounded-lg bg-purple-950/30 border border-purple-500/30 text-[11px] text-purple-200">
-                  <strong>시뮬레이션 매핑: </strong>{paperResult.experimentMapping.basis}
+                  <strong>시뮬레이션 연결: </strong>{paperResult.experimentMapping.basis}
                 </div>
               ) : (
                 <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] text-slate-400">
-                  이 논문과 일치하는 내장 시뮬레이션이 없어 실험실을 생성하지 않았습니다.
+                  이 논문은 현재 지원하는 시뮬레이션(자유 낙하)과 맞지 않아 실험실을 만들지 않았습니다.
                 </div>
               )}
 
