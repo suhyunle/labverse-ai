@@ -37,7 +37,8 @@ const ai = new GoogleGenAI({
 const PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-4-argon';
 const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.8-flash';
 const LITE_MODEL = process.env.GEMINI_LITE_MODEL || 'gemini-3.1-flash-lite'; // quick utility calls (query translation)
-const GEMINI_TIMEOUT_MS = 15000;
+const GEMINI_TIMEOUT_MS = 15000; // primary model budget
+const GEMINI_FALLBACK_TIMEOUT_MS = parseInt(process.env.GEMINI_FALLBACK_TIMEOUT_MS || '45000', 10); // last resort: nothing left to fall back to
 
 /**
  * Calls Gemini for strict JSON. Primary model gets a 15 s AbortController timeout, then the
@@ -50,9 +51,11 @@ async function generateJson(
   if (!apiKey) throw new Error('GEMINI_API_KEY가 설정되지 않았습니다');
   const models = opts.models ?? (PRIMARY_MODEL === FALLBACK_MODEL ? [PRIMARY_MODEL] : [PRIMARY_MODEL, FALLBACK_MODEL]);
   let lastErr: any;
-  for (const model of models) {
+  for (let i = 0; i < models.length; i++) {
+    const model = models[i];
+    const isLast = i === models.length - 1 && models.length > 1;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? GEMINI_TIMEOUT_MS);
+    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? (isLast ? GEMINI_FALLBACK_TIMEOUT_MS : GEMINI_TIMEOUT_MS));
     try {
       const response = await ai.models.generateContent({
         model,
