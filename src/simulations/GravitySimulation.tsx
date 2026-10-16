@@ -1,299 +1,471 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, Wind, ShieldCheck, Gauge } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import * as THREE from 'three';
+import { Play, Pause, RotateCcw, Wind, ShieldCheck } from 'lucide-react';
 import {
-  calculateFreeFall,
-  GRAVITY_OBJECT_PRESETS,
-  CELESTIAL_GRAVITY_PRESETS,
-  GravityObjectSpec,
+  analyticFall,
+  bodyFromVariables,
+  FALL_BODY_PRESETS,
+  FallBody,
+  FallSimulation,
+  GRAVITY_PLANET_PRESETS,
+  paramsFromVariables,
+  sampleAt,
+  simulateFall,
 } from '../engines/gravity';
+import { VariableSpec } from '../types';
 import { sound } from '../lib/audio';
 
-interface GravitySimulationProps {
+export interface GravityRunResult {
   variables: Record<string, number>;
-  onUpdateMetrics?: (metrics: Record<string, number | string>) => void;
+  bodies: {
+    label: 'A' | 'B';
+    simLandingTime: number;
+    theoryLandingTime: number;
+    impactVelocity: number;
+    terminalVelocity: number | null;
+  }[];
+  vacuumLandingTime: number;
 }
 
+interface GravitySimulationProps {
+  variableSpecs: VariableSpec[];
+  variables: Record<string, number>;
+  onChangeVariable: (id: string, value: number) => void;
+  /** Called once per finished run (never per frame). */
+  onRunComplete?: (result: GravityRunResult) => void;
+}
+
+const VIEW_HEIGHT = 10; // scene units for the full drop height
+const VIEW_MIN = -0.8;
+const VIEW_SPAN = 12;
+const COLOR_A = '#22d3ee';
+const COLOR_B = '#fb7185';
+const SPEEDS = [1, 0.5, 0.25];
+
+const radiusFromArea = (areaM2: number) => {
+  const r = Math.sqrt(areaM2 / Math.PI);
+  return Math.min(0.55, Math.max(0.14, 0.14 + (r - 0.04) * 2.2));
+};
+
+const fmt = (n: number, d = 2) => (Number.isFinite(n) ? n.toFixed(d) : '—');
+
+/** Scene-space centre of a body given its height above ground. */
+const toSceneY = (y: number, height: number, radius: number) => radius + (y / height) * (VIEW_HEIGHT - radius);
+
+const Fit: React.FC = () => {
+  const { size, camera } = useThree();
+  useEffect(() => {
+    const cam = camera as THREE.OrthographicCamera;
+    cam.zoom = size.height / VIEW_SPAN;
+    cam.position.set(0, VIEW_MIN + VIEW_SPAN / 2, 20);
+    cam.lookAt(0, VIEW_MIN + VIEW_SPAN / 2, 0);
+    cam.updateProjectionMatrix();
+  }, [size.height, camera]);
+  return null;
+};
+
+interface BallProps {
+  x: number;
+  color: string;
+  radius: number;
+  sim: FallSimulation;
+  height: number;
+  timeRef: React.MutableRefObject<number>;
+}
+
+const Ball: React.FC<BallProps> = ({ x, color, radius, sim, height, timeRef }) => {
+  const ref = useRef<THREE.Mesh>(null);
+  useFrame(() => {
+    if (!ref.current) return;
+    const s = sampleAt(sim, timeRef.current);
+    ref.current.position.set(x, toSceneY(s.y, height, radius), 0);
+  });
+  return (
+    <mesh ref={ref} position={[x, toSceneY(height, height, radius), 0]}>
+      <sphereGeometry args={[radius, 32, 32]} />
+      <meshStandardMaterial color={color} roughness={0.35} metalness={0.2} />
+    </mesh>
+  );
+};
+
+const Scene: React.FC<{
+  simA: FallSimulation;
+  simB: FallSimulation;
+  radiusA: number;
+  radiusB: number;
+  height: number;
+  airDensity: number;
+  timeRef: React.MutableRefObject<number>;
+}> = ({ simA, simB, radiusA, radiusB, height, airDensity, timeRef }) => (
+  <>
+    <Fit />
+    <color attach="background" args={[airDensity > 0 ? '#0b1422' : '#050a14']} />
+    <ambientLight intensity={0.7} />
+    <directionalLight position={[4, 12, 10]} intensity={1.6} />
+    {/* ground */}
+    <mesh position={[0, -0.4, 0]}>
+      <boxGeometry args={[9, 0.8, 3]} />
+      <meshStandardMaterial color="#14283f" />
+    </mesh>
+    {/* drop columns */}
+    {[-2, 2].map((x) => (
+      <mesh key={x} position={[x, VIEW_HEIGHT / 2, -0.6]}>
+        <boxGeometry args={[0.03, VIEW_HEIGHT + 0.6, 0.03]} />
+        <meshBasicMaterial color="#1e3a5f" />
+      </mesh>
+    ))}
+    {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+      <mesh key={f} position={[0, f * VIEW_HEIGHT, -0.8]}>
+        <boxGeometry args={[8, 0.012, 0.01]} />
+        <meshBasicMaterial color="#1e3a5f" />
+      </mesh>
+    ))}
+    <Ball x={-2} color={COLOR_A} radius={radiusA} sim={simA} height={height} timeRef={timeRef} />
+    <Ball x={2} color={COLOR_B} radius={radiusB} sim={simB} height={height} timeRef={timeRef} />
+  </>
+);
+
+const VelocityGraph: React.FC<{ simA: FallSimulation; simB: FallSimulation; time: number }> = ({ simA, simB, time }) => {
+  const W = 320;
+  const H = 130;
+  const P = { l: 34, r: 8, t: 8, b: 22 };
+  const tMax = Math.max(simA.landingTime, simB.landingTime);
+  const vMax = Math.max(simA.impactVelocity, simB.impactVelocity, 1) * 1.08;
+  const x = (t: number) => P.l + (t / tMax) * (W - P.l - P.r);
+  const y = (v: number) => H - P.b - (v / vMax) * (H - P.t - P.b);
+  const path = (sim: FallSimulation, until: number) => {
+    const stride = Math.max(1, Math.floor(sim.samples.length / 200));
+    const pts: string[] = [];
+    for (let i = 0; i < sim.samples.length; i += stride) {
+      const s = sim.samples[i];
+      if (s.t > until) break;
+      pts.push(`${x(s.t).toFixed(1)},${y(s.v).toFixed(1)}`);
+    }
+    const cur = sampleAt(sim, until);
+    pts.push(`${x(cur.t).toFixed(1)},${y(cur.v).toFixed(1)}`);
+    return pts.join(' ');
+  };
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="속도-시간 그래프">
+      <line x1={P.l} y1={H - P.b} x2={W - P.r} y2={H - P.b} stroke="#334155" />
+      <line x1={P.l} y1={P.t} x2={P.l} y2={H - P.b} stroke="#334155" />
+      <text x={P.l - 4} y={P.t + 8} fontSize="9" fill="#94a3b8" textAnchor="end">{fmt(vMax, 0)}</text>
+      <text x={P.l - 4} y={H - P.b} fontSize="9" fill="#94a3b8" textAnchor="end">0</text>
+      <text x={W - P.r} y={H - 6} fontSize="9" fill="#94a3b8" textAnchor="end">{fmt(tMax, 1)} s</text>
+      <text x={P.l + 4} y={P.t + 8} fontSize="9" fill="#64748b">속도 (m/s)</text>
+      <polyline points={path(simA, time)} fill="none" stroke={COLOR_A} strokeWidth="2" />
+      <polyline points={path(simB, time)} fill="none" stroke={COLOR_B} strokeWidth="2" strokeDasharray="5 3" />
+    </svg>
+  );
+};
+
+const SliderRow: React.FC<{ spec: VariableSpec; value: number; onChange: (v: number) => void }> = ({ spec, value, onChange }) => (
+  <label className="block">
+    <div className="flex items-center justify-between text-[11px] mb-0.5">
+      <span className="text-slate-300">{spec.label}</span>
+      <span className="font-mono text-cyan-300">{value} {spec.unit}</span>
+    </div>
+    <input
+      type="range"
+      min={spec.min}
+      max={spec.max}
+      step={spec.step}
+      value={value}
+      onChange={(e) => onChange(parseFloat(e.target.value))}
+      className="w-full accent-cyan-400 cursor-pointer"
+    />
+  </label>
+);
+
 export const GravitySimulation: React.FC<GravitySimulationProps> = ({
+  variableSpecs,
   variables,
-  onUpdateMetrics,
+  onChangeVariable,
+  onRunComplete,
 }) => {
-  const [objectAId, setObjectAId] = useState<string>('bowling_ball');
-  const [objectBId, setObjectBId] = useState<string>('feather');
-  const [isSimulating, setIsSimulating] = useState<boolean>(false);
-  const [simTime, setSimTime] = useState<number>(0);
+  const params = paramsFromVariables(variables);
+  const bodyA = bodyFromVariables(variables, 'A');
+  const bodyB = bodyFromVariables(variables, 'B');
 
-  const height = variables.dropHeight ?? 25; // meters
-  const gravity = variables.gravity ?? 9.80665; // m/s^2
-  const airDensity = variables.airDensity ?? 0.0; // 0 for vacuum
+  // Memoise on primitive inputs so React re-renders never re-run the integrator.
+  const simA = useMemo(
+    () => simulateFall(params, bodyA),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params.heightM, params.gravity, params.airDensity, bodyA.massKg, bodyA.areaM2, bodyA.dragCoefficient],
+  );
+  const simB = useMemo(
+    () => simulateFall(params, bodyB),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params.heightM, params.gravity, params.airDensity, bodyB.massKg, bodyB.areaM2, bodyB.dragCoefficient],
+  );
+  const theoryA = useMemo(
+    () => analyticFall(params, bodyA),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params.heightM, params.gravity, params.airDensity, bodyA.massKg, bodyA.areaM2, bodyA.dragCoefficient],
+  );
+  const theoryB = useMemo(
+    () => analyticFall(params, bodyB),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params.heightM, params.gravity, params.airDensity, bodyB.massKg, bodyB.areaM2, bodyB.dragCoefficient],
+  );
+  const vacuumTime = Math.sqrt((2 * params.heightM) / params.gravity);
+  const endTime = Math.max(simA.landingTime, simB.landingTime);
 
-  const objA: GravityObjectSpec = GRAVITY_OBJECT_PRESETS[objectAId] || GRAVITY_OBJECT_PRESETS.bowling_ball;
-  const objB: GravityObjectSpec = GRAVITY_OBJECT_PRESETS[objectBId] || GRAVITY_OBJECT_PRESETS.feather;
+  const [time, setTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const timeRef = useRef(0);
+  const completedRef = useRef(false);
+  const onRunCompleteRef = useRef(onRunComplete);
+  onRunCompleteRef.current = onRunComplete;
+  const variablesRef = useRef(variables);
+  variablesRef.current = variables;
 
-  // Compute deterministic trajectory solutions
-  const resA = calculateFreeFall(height, gravity, objA, airDensity);
-  const resB = calculateFreeFall(height, gravity, objB, airDensity);
+  const reset = () => {
+    timeRef.current = 0;
+    completedRef.current = false;
+    setTime(0);
+    setPlaying(false);
+  };
 
-  const maxFallTime = Math.max(resA.fallTimeAir, resB.fallTimeAir);
-
-  // Animation frame loop
-  const animRef = useRef<number | null>(null);
-  const lastTimeRef = useRef<number | null>(null);
-
+  // Any change to the experiment conditions invalidates the current run.
+  const conditionKey = [
+    params.heightM, params.gravity, params.airDensity,
+    bodyA.massKg, bodyA.areaM2, bodyA.dragCoefficient,
+    bodyB.massKg, bodyB.areaM2, bodyB.dragCoefficient,
+  ].join('|');
   useEffect(() => {
-    if (!isSimulating) {
-      if (animRef.current) cancelAnimationFrame(animRef.current);
-      return;
-    }
+    reset();
+  }, [conditionKey]);
 
-    lastTimeRef.current = performance.now();
-
-    const loop = (now: number) => {
-      const dt = (now - (lastTimeRef.current || now)) / 1000;
-      lastTimeRef.current = now;
-
-      setSimTime((prev) => {
-        const next = prev + dt;
-        if (next >= maxFallTime + 0.5) {
-          setIsSimulating(false);
+  // Real-time clock: advances by wall-clock delta, never by render count.
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.1, (now - last) / 1000) * speed;
+      last = now;
+      const next = Math.min(endTime, timeRef.current + dt);
+      timeRef.current = next;
+      setTime(next);
+      if (next >= endTime) {
+        setPlaying(false);
+        if (!completedRef.current) {
+          completedRef.current = true;
           sound.playRumble(0.4);
-          return maxFallTime;
+          onRunCompleteRef.current?.({
+            variables: { ...variablesRef.current },
+            bodies: [
+              { label: 'A', simLandingTime: simA.landingTime, theoryLandingTime: theoryA.landingTime, impactVelocity: simA.impactVelocity, terminalVelocity: Number.isFinite(simA.terminalVelocity) ? simA.terminalVelocity : null },
+              { label: 'B', simLandingTime: simB.landingTime, theoryLandingTime: theoryB.landingTime, impactVelocity: simB.impactVelocity, terminalVelocity: Number.isFinite(simB.terminalVelocity) ? simB.terminalVelocity : null },
+            ],
+            vacuumLandingTime: vacuumTime,
+          });
         }
-        return next;
-      });
-
-      animRef.current = requestAnimationFrame(loop);
-    };
-
-    animRef.current = requestAnimationFrame(loop);
-    return () => {
-      if (animRef.current) cancelAnimationFrame(animRef.current);
-    };
-  }, [isSimulating, maxFallTime]);
-
-  // Compute current positions based on simTime
-  const getCurrentY = (traj: { t: number; y: number; v: number }[]) => {
-    if (simTime <= 0) return height;
-    if (simTime >= traj[traj.length - 1].t) return 0;
-    for (let i = 0; i < traj.length - 1; i++) {
-      if (simTime >= traj[i].t && simTime <= traj[i + 1].t) {
-        const frac = (simTime - traj[i].t) / (traj[i + 1].t - traj[i].t);
-        return traj[i].y + frac * (traj[i + 1].y - traj[i].y);
+        return;
       }
-    }
-    return 0;
-  };
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, speed, endTime, simA, simB, theoryA, theoryB, vacuumTime]);
 
-  const currentYA = getCurrentY(resA.trajectoryAir);
-  const currentYB = getCurrentY(resB.trajectoryAir);
-
-  // Sync metrics to parent
-  useEffect(() => {
-    if (onUpdateMetrics) {
-      onUpdateMetrics({
-        fallTimeA: `${resA.fallTimeAir.toFixed(2)} 초`,
-        fallTimeB: `${resB.fallTimeAir.toFixed(2)} 초`,
-        impactVelocityA: `${resA.impactVelocityAir.toFixed(1)} m/s`,
-        impactVelocityB: `${resB.impactVelocityAir.toFixed(1)} m/s`,
-        vacuumFallTime: `${resA.fallTimeVacuum.toFixed(2)} 초 (진공 이론값)`,
-        environment: airDensity === 0 ? '완전 진공 (Vacuum Chamber)' : `대기 환경 (ρ = ${airDensity} kg/m³)`,
-      });
-    }
-  }, [resA, resB, airDensity, onUpdateMetrics]);
-
-  const handleStart = () => {
+  const togglePlay = () => {
     sound.playClick();
-    if (simTime >= maxFallTime) {
-      setSimTime(0);
-    }
-    setIsSimulating(true);
+    if (!playing && timeRef.current >= endTime) reset();
+    setPlaying((p) => !p);
   };
 
-  const handleReset = () => {
+  const stA = sampleAt(simA, time);
+  const stB = sampleAt(simB, time);
+  const radiusA = radiusFromArea(bodyA.areaM2);
+  const radiusB = radiusFromArea(bodyB.areaM2);
+  const isVacuum = params.airDensity === 0;
+  const specById = (id: string) => variableSpecs.find((s) => s.id === id);
+
+  const applyBodyPreset = (which: 'A' | 'B', presetId: string) => {
     sound.playClick();
-    setIsSimulating(false);
-    setSimTime(0);
+    const b: FallBody = FALL_BODY_PRESETS[presetId].body;
+    onChangeVariable(`mass${which}`, b.massKg);
+    onChangeVariable(`area${which}`, b.areaM2);
+    onChangeVariable(`cd${which}`, b.dragCoefficient);
   };
+
+  const sliderGroup = (ids: string[]) =>
+    ids.map((id) => {
+      const spec = specById(id);
+      if (!spec) return null;
+      return <SliderRow key={id} spec={spec} value={variables[id] ?? spec.default} onChange={(v) => onChangeVariable(id, v)} />;
+    });
+
+  const bodyBlock = (which: 'A' | 'B', color: string, title: string) => (
+    <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold" style={{ color }}>{title}</span>
+        <div className="flex gap-1">
+          {Object.entries(FALL_BODY_PRESETS).map(([id, p]) => (
+            <button
+              key={id}
+              onClick={() => applyBodyPreset(which, id)}
+              className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300 cursor-pointer"
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+      </div>
+      {sliderGroup([`mass${which}`, `area${which}`, `cd${which}`])}
+    </div>
+  );
+
+  const rowErr = (sim: number, theory: number) => (theory > 0 ? ((sim - theory) / theory) * 100 : 0);
 
   return (
-    <div className="relative w-full h-full flex flex-col items-center justify-between p-4 sm:p-6 bg-slate-950 text-white select-none overflow-hidden">
-      {/* Top Chamber Header & Atmosphere Badge */}
-      <div className="w-full max-w-4xl flex items-center justify-between z-20">
-        <div className="flex items-center gap-2">
-          <div className="p-2 rounded-xl bg-cyan-950 border border-cyan-500/40 text-cyan-400">
-            <Gauge className="w-5 h-5" />
-          </div>
+    <div className="absolute inset-0 flex flex-col lg:flex-row bg-slate-950 text-white">
+      {/* 3D chamber + playback */}
+      <div className="flex flex-col min-h-0 h-[55%] lg:h-full lg:flex-1">
+        <div className="flex items-center justify-between px-4 pt-3 pb-2 text-xs">
           <div>
-            <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
-              <span>뉴턴-갈릴레오 자유 낙하 실험 체임버</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-900/60 border border-cyan-500/30 text-cyan-300 font-mono">
-                h = {height}m
-              </span>
-            </h3>
-            <p className="text-xs text-slate-400">
-              {airDensity === 0 ? '진공 상태: 질량과 형상에 무관하게 동일한 가속도 g로 낙하' : '공기 저항 환경: 단면적과 항력 계수에 따른 종단 속도 발생'}
-            </p>
+            <div className="font-bold text-sm">자유 낙하 실험 챔버</div>
+            <div className="text-slate-400">
+              {isVacuum ? '진공: 질량과 형상에 관계없이 같은 가속도로 낙하' : '공기 저항 작용: F = ½ρv²C_dA'}
+            </div>
+          </div>
+          <div className={`px-2.5 py-1 rounded-lg border font-mono flex items-center gap-1.5 ${isVacuum ? 'border-emerald-500/50 text-emerald-300 bg-emerald-950/60' : 'border-amber-500/50 text-amber-300 bg-amber-950/60'}`}>
+            {isVacuum ? <ShieldCheck className="w-3.5 h-3.5" /> : <Wind className="w-3.5 h-3.5" />}
+            <span>{isVacuum ? '진공' : `공기 밀도 ${params.airDensity} kg/m³`}</span>
           </div>
         </div>
 
-        {/* Vacuum Status Pill */}
-        <div className={`px-3 py-1.5 rounded-xl border text-xs font-mono font-semibold flex items-center gap-1.5 shadow-lg ${
-          airDensity === 0
-            ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
-            : 'bg-amber-950/80 border-amber-500/50 text-amber-300'
-        }`}>
-          {airDensity === 0 ? <ShieldCheck className="w-4 h-4 text-emerald-400" /> : <Wind className="w-4 h-4 text-amber-400" />}
-          <span>{airDensity === 0 ? '진공 체임버 (VACUUM)' : `공기 저항 ON (ρ=${airDensity})`}</span>
-        </div>
-      </div>
-
-      {/* Main Chamber Visualization Canvas & Tower */}
-      <div className="relative w-full max-w-3xl flex-1 my-3 flex items-center justify-center">
-        {/* Height Meter Ruler on Left */}
-        <div className="relative h-full w-12 flex flex-col justify-between items-end pr-2 text-[10px] font-mono text-slate-500 border-r border-slate-800">
-          <span>{height}m</span>
-          <span>{(height * 0.75).toFixed(0)}m</span>
-          <span>{(height * 0.5).toFixed(0)}m</span>
-          <span>{(height * 0.25).toFixed(0)}m</span>
-          <span className="text-cyan-400 font-bold">0m (지면)</span>
-        </div>
-
-        {/* Dual Drop Channels */}
-        <div className="relative flex-1 h-full mx-4 rounded-2xl bg-slate-900/40 border border-slate-800 backdrop-blur-md overflow-hidden grid grid-cols-2 divide-x divide-slate-800/80 shadow-2xl">
-          {/* Channel A */}
-          <div className="relative h-full flex flex-col justify-between p-3">
-            <div className="flex items-center justify-between text-xs z-10">
-              <select
-                value={objectAId}
-                onChange={(e) => {
-                  sound.playClick();
-                  setObjectAId(e.target.value);
-                  handleReset();
-                }}
-                className="bg-slate-950 border border-slate-700 text-cyan-300 rounded-lg px-2 py-1 text-xs outline-none cursor-pointer"
-              >
-                {Object.values(GRAVITY_OBJECT_PRESETS).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.massKg}kg)
-                  </option>
-                ))}
-              </select>
-              <span className="font-mono text-xs text-slate-400">
-                {currentYA.toFixed(1)}m
-              </span>
-            </div>
-
-            {/* Falling Body A */}
+        <div className="relative flex-1 min-h-0 mx-4 rounded-xl overflow-hidden border border-slate-800">
+          <Canvas orthographic dpr={[1, 2]} gl={{ antialias: true }}>
+            <Scene
+              simA={simA}
+              simB={simB}
+              radiusA={radiusA}
+              radiusB={radiusB}
+              height={params.heightM}
+              airDensity={params.airDensity}
+              timeRef={timeRef}
+            />
+          </Canvas>
+          {/* height ruler (orthographic camera => exact alignment) */}
+          {[1, 0.75, 0.5, 0.25, 0].map((f) => (
             <div
-              className="absolute left-1/2 -translate-x-1/2 transition-all duration-75 flex flex-col items-center"
-              style={{
-                top: `${((height - currentYA) / height) * 82 + 10}%`,
-              }}
+              key={f}
+              className="absolute left-0 pointer-events-none text-[10px] font-mono text-slate-400 bg-slate-950/70 px-1 rounded-r"
+              style={{ top: `${((VIEW_MIN + VIEW_SPAN - f * VIEW_HEIGHT) / VIEW_SPAN) * 100}%`, transform: 'translateY(-50%)' }}
             >
-              <div
-                className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg border border-cyan-400/40 font-mono text-[10px] font-bold text-slate-950"
-                style={{ backgroundColor: objA.color }}
-              >
-                {objA.massKg}kg
-              </div>
-              <span className="text-[10px] text-cyan-300 font-mono mt-1 bg-slate-950/80 px-1 rounded">
-                v: {((resA.trajectoryAir.find((t) => t.t >= simTime)?.v || 0)).toFixed(1)} m/s
-              </span>
+              {fmt(f * params.heightM, 1)} m
             </div>
-
-            {/* Impact Base Indicator */}
-            <div className="w-full h-2 rounded bg-cyan-500/20 border-t border-cyan-500/40 mt-auto" />
-          </div>
-
-          {/* Channel B */}
-          <div className="relative h-full flex flex-col justify-between p-3">
-            <div className="flex items-center justify-between text-xs z-10">
-              <select
-                value={objectBId}
-                onChange={(e) => {
-                  sound.playClick();
-                  setObjectBId(e.target.value);
-                  handleReset();
-                }}
-                className="bg-slate-950 border border-slate-700 text-rose-300 rounded-lg px-2 py-1 text-xs outline-none cursor-pointer"
-              >
-                {Object.values(GRAVITY_OBJECT_PRESETS).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.massKg}kg)
-                  </option>
-                ))}
-              </select>
-              <span className="font-mono text-xs text-slate-400">
-                {currentYB.toFixed(1)}m
-              </span>
-            </div>
-
-            {/* Falling Body B */}
-            <div
-              className="absolute left-1/2 -translate-x-1/2 transition-all duration-75 flex flex-col items-center"
-              style={{
-                top: `${((height - currentYB) / height) * 82 + 10}%`,
-              }}
-            >
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center shadow-lg border border-rose-400/40 font-mono text-[10px] font-bold text-slate-950"
-                style={{ backgroundColor: objB.color }}
-              >
-                {objB.massKg}kg
-              </div>
-              <span className="text-[10px] text-rose-300 font-mono mt-1 bg-slate-950/80 px-1 rounded">
-                v: {((resB.trajectoryAir.find((t) => t.t >= simTime)?.v || 0)).toFixed(1)} m/s
-              </span>
-            </div>
-
-            {/* Impact Base Indicator */}
-            <div className="w-full h-2 rounded bg-rose-500/20 border-t border-rose-500/40 mt-auto" />
-          </div>
+          ))}
+          <div className="absolute top-2 left-1/2 -translate-x-[calc(50%+7rem)] text-[11px] font-bold" style={{ color: COLOR_A }}>물체 A</div>
+          <div className="absolute top-2 left-1/2 translate-x-[calc(-50%+7rem)] text-[11px] font-bold" style={{ color: COLOR_B }}>물체 B</div>
         </div>
-      </div>
 
-      {/* Control Bar & Simulation Playback */}
-      <div className="w-full max-w-2xl bg-slate-900/80 border border-slate-800 rounded-2xl p-3 backdrop-blur-xl flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
-          {!isSimulating ? (
-            <button
-              onClick={handleStart}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-cyan-500/20"
-            >
-              <Play className="w-4 h-4 fill-current" />
-              <span>동시 낙하 시작</span>
-            </button>
-          ) : (
-            <button
-              onClick={() => setIsSimulating(false)}
-              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center gap-1.5 transition cursor-pointer"
-            >
-              <Pause className="w-4 h-4 fill-current" />
-              <span>일시 정지</span>
-            </button>
-          )}
-
+        <div className="flex items-center gap-2 px-4 py-3 text-xs">
           <button
-            onClick={handleReset}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
-            title="초기화"
+            onClick={togglePlay}
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold flex items-center gap-1.5 cursor-pointer"
+          >
+            {playing ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+            <span>{playing ? '일시정지' : time > 0 && time < endTime ? '계속' : '낙하 시작'}</span>
+          </button>
+          <button
+            onClick={() => { sound.playClick(); reset(); }}
+            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+            title="리셋"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
-        </div>
-
-        {/* Fall Time Comparative Readout */}
-        <div className="flex items-center gap-4 font-mono text-xs">
-          <div>
-            <span className="text-slate-400 mr-1.5">진행 시간:</span>
-            <span className="text-cyan-300 font-bold">{simTime.toFixed(2)}s</span>
+          <div className="flex items-center gap-1 ml-2">
+            <span className="text-slate-500">배속</span>
+            {SPEEDS.map((s) => (
+              <button
+                key={s}
+                onClick={() => setSpeed(s)}
+                className={`px-2 py-1 rounded font-mono cursor-pointer ${speed === s ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300'}`}
+              >
+                {s}×
+              </button>
+            ))}
           </div>
-          <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-slate-800 text-[11px]">
-            <span className="text-cyan-400">{objA.name.split(' ')[0]}: {resA.fallTimeAir}s</span>
-            <span className="text-slate-500">vs</span>
-            <span className="text-rose-400">{objB.name.split(' ')[0]}: {resB.fallTimeAir}s</span>
-          </div>
+          <div className="ml-auto font-mono text-slate-300">경과 시간 <span className="text-cyan-300 font-bold">{fmt(time)} s</span></div>
         </div>
       </div>
+
+      {/* Side panel: never overlaps the chamber */}
+      <aside className="lg:w-[380px] shrink-0 overflow-y-auto border-t lg:border-t-0 lg:border-l border-slate-800 bg-slate-950/90 p-3 space-y-3 text-xs">
+        <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2">
+          <div className="font-bold text-slate-200">환경 조건</div>
+          <div className="flex flex-wrap gap-1">
+            {GRAVITY_PLANET_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => { sound.playClick(); onChangeVariable('gravity', p.g); }}
+                className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${Math.abs((variables.gravity ?? 9.81) - p.g) < 0.005 ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+              >
+                {p.name} {p.g}
+              </button>
+            ))}
+            <button
+              onClick={() => { sound.playClick(); onChangeVariable('airDensity', 0); }}
+              className="px-2 py-0.5 rounded text-[11px] bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
+            >
+              진공
+            </button>
+            <button
+              onClick={() => { sound.playClick(); onChangeVariable('airDensity', 1.2); }}
+              className="px-2 py-0.5 rounded text-[11px] bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
+            >
+              지구 대기 1.2
+            </button>
+          </div>
+          {sliderGroup(['dropHeight', 'gravity', 'airDensity'])}
+        </div>
+
+        {bodyBlock('A', COLOR_A, '물체 A')}
+        {bodyBlock('B', COLOR_B, '물체 B')}
+
+        <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-1.5">
+          <div className="font-bold text-slate-200">실시간 측정</div>
+          <table className="w-full font-mono text-[11px]">
+            <thead>
+              <tr className="text-slate-500">
+                <th className="text-left font-normal"></th>
+                <th className="text-right font-normal" style={{ color: COLOR_A }}>물체 A</th>
+                <th className="text-right font-normal" style={{ color: COLOR_B }}>물체 B</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-200">
+              <tr><td className="text-slate-400">현재 높이</td><td className="text-right">{fmt(stA.y, 2)} m</td><td className="text-right">{fmt(stB.y, 2)} m</td></tr>
+              <tr><td className="text-slate-400">현재 속도</td><td className="text-right">{fmt(stA.v, 2)} m/s</td><td className="text-right">{fmt(stB.v, 2)} m/s</td></tr>
+              <tr><td className="text-slate-400">착지 시간(시뮬)</td><td className="text-right">{fmt(simA.landingTime, 3)} s</td><td className="text-right">{fmt(simB.landingTime, 3)} s</td></tr>
+              <tr><td className="text-slate-400">착지 시간(이론)</td><td className="text-right">{fmt(theoryA.landingTime, 3)} s</td><td className="text-right">{fmt(theoryB.landingTime, 3)} s</td></tr>
+              <tr><td className="text-slate-400">시뮬-이론 오차</td><td className="text-right">{fmt(rowErr(simA.landingTime, theoryA.landingTime), 3)} %</td><td className="text-right">{fmt(rowErr(simB.landingTime, theoryB.landingTime), 3)} %</td></tr>
+              <tr><td className="text-slate-400">착지 속도</td><td className="text-right">{fmt(simA.impactVelocity, 2)} m/s</td><td className="text-right">{fmt(simB.impactVelocity, 2)} m/s</td></tr>
+              <tr><td className="text-slate-400">종단 속도</td><td className="text-right">{Number.isFinite(simA.terminalVelocity) ? `${fmt(simA.terminalVelocity, 1)} m/s` : '없음'}</td><td className="text-right">{Number.isFinite(simB.terminalVelocity) ? `${fmt(simB.terminalVelocity, 1)} m/s` : '없음'}</td></tr>
+            </tbody>
+          </table>
+          <div className="text-[11px] text-slate-400 pt-1">
+            진공 이론 낙하 시간 t = √(2h/g) = <span className="font-mono text-slate-200">{fmt(vacuumTime, 3)} s</span>
+          </div>
+          <div className="text-[11px] text-slate-500">
+            이론값은 이차 항력 모델의 해석해이며, 시뮬레이션은 Δt = 1 ms RK4 적분입니다.
+          </div>
+        </div>
+
+        <div className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800">
+          <div className="font-bold text-slate-200 mb-1">속도–시간 그래프</div>
+          <VelocityGraph simA={simA} simB={simB} time={time} />
+          <div className="flex gap-3 text-[10px] text-slate-400 mt-1">
+            <span><span style={{ color: COLOR_A }}>━</span> 물체 A</span>
+            <span><span style={{ color: COLOR_B }}>╍</span> 물체 B</span>
+          </div>
+        </div>
+      </aside>
     </div>
   );
 };

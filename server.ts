@@ -60,36 +60,15 @@ const PRESET_EXPERIMENTS: Record<string, any> = {
       },
     ],
     variables: [
-      {
-        id: 'dropHeight',
-        label: '낙하 고도 (Drop Height)',
-        min: 5,
-        max: 100,
-        default: 30,
-        step: 5,
-        unit: 'm',
-        description: '자유 낙하 시험 타워의 낙하 시작 고도',
-      },
-      {
-        id: 'gravity',
-        label: '중력 가속도 (Gravity Accel)',
-        min: 1.62,
-        max: 24.79,
-        default: 9.81,
-        step: 0.1,
-        unit: 'm/s²',
-        description: '중력 가속도. 1.62: 달, 3.72: 화성, 9.81: 지구, 24.79: 목성',
-      },
-      {
-        id: 'airDensity',
-        label: '체임버 공기 밀도 (Air Density)',
-        min: 0.0,
-        max: 1.3,
-        default: 0.0,
-        step: 0.1,
-        unit: 'kg/m³',
-        description: '체임버 내부 공기 밀도. 0.0: 완전 진공, 1.225: 지구 해수면 대기',
-      },
+      { id: 'dropHeight', label: '낙하 높이', min: 1, max: 100, default: 30, step: 1, unit: 'm', description: '물체를 놓는 높이' },
+      { id: 'gravity', label: '중력 가속도', min: 0.1, max: 30, default: 9.81, step: 0.01, unit: 'm/s²', description: '달 1.62, 화성 3.71, 지구 9.81, 목성 24.79' },
+      { id: 'airDensity', label: '공기 밀도', min: 0, max: 1.5, default: 0, step: 0.05, unit: 'kg/m³', description: '0이면 진공, 지구 해수면은 약 1.2' },
+      { id: 'massA', label: '물체 A 질량', min: 0.001, max: 50, default: 6, step: 0.001, unit: 'kg', description: '물체 A의 질량' },
+      { id: 'areaA', label: '물체 A 단면적', min: 0.0005, max: 0.2, default: 0.0366, step: 0.0005, unit: 'm²', description: '낙하 방향에서 본 단면적' },
+      { id: 'cdA', label: '물체 A 항력계수', min: 0.04, max: 2, default: 0.47, step: 0.01, unit: '', description: '구는 약 0.47' },
+      { id: 'massB', label: '물체 B 질량', min: 0.001, max: 50, default: 0.005, step: 0.001, unit: 'kg', description: '물체 B의 질량' },
+      { id: 'areaB', label: '물체 B 단면적', min: 0.0005, max: 0.2, default: 0.0078, step: 0.0005, unit: 'm²', description: '낙하 방향에서 본 단면적' },
+      { id: 'cdB', label: '물체 B 항력계수', min: 0.04, max: 2, default: 1.3, step: 0.01, unit: '', description: '깃털 같은 납작한 물체는 1 이상' },
     ],
     observableOutputs: [
       { id: 'fallTimeA', label: '물체 A 낙하 시간', unit: '초 (s)', description: '물체 A가 지면에 도달하는 데 걸린 시간' },
@@ -422,77 +401,194 @@ For volcano experiments:
   }
 });
 
-// 2. Paper-to-Lab API: Extracts research metadata & synthesizes experiment
+// 2. Paper-to-Lab API: real paper metadata via Crossref (DOI) and OpenAlex (search).
+// No paper data is hardcoded; every citation links to https://doi.org/{doi}.
+// Evidence level: 'abstract' when an abstract was retrieved, otherwise 'metadata' (title/authors/venue only).
+const SCHOLAR_UA = 'labverse-ai/1.0 (mailto:sksuhyun@gmail.com)';
+const DOI_PATTERN = /10\.\d{4,9}\/[^\s"<>]+/i;
+
+function extractDoi(input: string): string | null {
+  const m = input.match(DOI_PATTERN);
+  return m ? m[0].replace(/[.,;)\]]+$/, '').toLowerCase() : null;
+}
+
+function doiUrl(doi: string) {
+  return `https://doi.org/${doi}`;
+}
+
+function stripTags(text: string) {
+  return text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function invertedIndexToText(idx?: Record<string, number[]> | null): string {
+  if (!idx) return '';
+  const words: string[] = [];
+  for (const [word, positions] of Object.entries(idx)) {
+    for (const pos of positions) words[pos] = word;
+  }
+  return words.filter(Boolean).join(' ');
+}
+
+async function fetchJson(url: string) {
+  const r = await fetch(url, {
+    headers: { 'User-Agent': SCHOLAR_UA, Accept: 'application/json' },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!r.ok) {
+    const err: any = new Error(`Upstream ${new URL(url).hostname} responded ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
+  return r.json();
+}
+
+function buildCitation(meta: { title: string; authors: string[]; year: number | null; journalOrSource: string; doi: string }) {
+  const authors = meta.authors.length > 3 ? `${meta.authors.slice(0, 3).join(', ')} et al.` : meta.authors.join(', ');
+  return `${authors || 'Unknown authors'}${meta.year ? ` (${meta.year})` : ''}. ${meta.title}. ${meta.journalOrSource ? meta.journalOrSource + '. ' : ''}${doiUrl(meta.doi)}`;
+}
+
+// Maps a paper's real text onto the closest built-in simulation. Returns null when nothing matches
+// rather than defaulting to an unrelated preset.
+function matchPresetFromText(text: string): { presetId: string; spec: any } | null {
+  const t = text.toLowerCase();
+  const rules: [string, RegExp][] = [
+    ['gravity', /free[- ]fall|gravitational acceleration|falling bod|galile/],
+    ['optics', /refraction|snell|total internal reflection|refractive index/],
+    ['fluid', /buoyan|archimed|density stratif|hydrostatic|immiscible/],
+    ['volcano', /volcan|magma|eruption/],
+    ['solar_system', /solar system|planetary orbit|tidal force|orbital mechanics/],
+  ];
+  for (const [presetId, re] of rules) {
+    if (re.test(t) && PRESET_EXPERIMENTS[presetId]) return { presetId, spec: PRESET_EXPERIMENTS[presetId] };
+  }
+  return null;
+}
+
+function buildAnalysis(meta: {
+  title: string; authors: string[]; year: number | null; journalOrSource: string; doi: string;
+  abstract: string; source: 'crossref' | 'openalex'; subjects: string[];
+}) {
+  const evidenceLevel = meta.abstract ? 'abstract' : 'metadata';
+  const mapping = matchPresetFromText(`${meta.title} ${meta.abstract} ${meta.subjects.join(' ')}`);
+  return {
+    paperMetadata: {
+      title: meta.title,
+      authors: meta.authors,
+      year: meta.year,
+      journalOrSource: meta.journalOrSource,
+      doi: meta.doi,
+      url: doiUrl(meta.doi),
+    },
+    abstract: meta.abstract || null,
+    subjects: meta.subjects,
+    evidence: {
+      level: evidenceLevel,
+      label: evidenceLevel === 'abstract' ? '초록 기반' : '메타데이터 기반',
+      note:
+        evidenceLevel === 'abstract'
+          ? '제목·저자·초록까지만 확인했으며 논문 본문은 분석하지 않았습니다.'
+          : '제목·저자·출처 등 서지 메타데이터만 확인했으며 초록과 본문은 확인하지 않았습니다.',
+      source: meta.source === 'crossref' ? 'Crossref' : 'OpenAlex',
+    },
+    citations: [
+      {
+        text: buildCitation(meta),
+        doi: meta.doi,
+        url: doiUrl(meta.doi),
+        evidenceLevel,
+      },
+    ],
+    experimentSpec: mapping?.spec ?? null,
+    experimentMapping: mapping
+      ? {
+          presetId: mapping.presetId,
+          basis: '제목·초록·분야 키워드 일치에 따른 근사 매핑 (논문의 실제 실험 재현이 아님)',
+        }
+      : null,
+  };
+}
+
+async function lookupCrossref(doi: string) {
+  const data = await fetchJson(`https://api.crossref.org/works/${encodeURIComponent(doi)}`);
+  const w = data.message;
+  const authors = (w.author || [])
+    .map((a: any) => [a.given, a.family].filter(Boolean).join(' ') || a.name)
+    .filter(Boolean);
+  const dateParts = (w.issued || w.published || w['published-print'] || w['published-online'])?.['date-parts']?.[0];
+  return buildAnalysis({
+    title: stripTags((w.title && w.title[0]) || ''),
+    authors,
+    year: dateParts?.[0] ?? null,
+    journalOrSource: (w['container-title'] && w['container-title'][0]) || w.publisher || '',
+    doi: (w.DOI || doi).toLowerCase(),
+    abstract: w.abstract ? stripTags(w.abstract).replace(/^abstract\s*/i, '') : '',
+    source: 'crossref',
+    subjects: w.subject || [],
+  });
+}
+
+// Crossref often lacks abstracts; OpenAlex frequently has them. Used to upgrade evidence level.
+async function fetchOpenAlexAbstract(doi: string): Promise<string> {
+  try {
+    const w = await fetchJson(`https://api.openalex.org/works/${encodeURIComponent(doiUrl(doi))}?select=abstract_inverted_index`);
+    return invertedIndexToText(w.abstract_inverted_index);
+  } catch {
+    return '';
+  }
+}
+
+async function searchOpenAlex(q: string) {
+  const url = `https://api.openalex.org/works?search=${encodeURIComponent(q)}&per-page=8&filter=has_doi:true&select=id,doi,title,publication_year,authorships,primary_location,abstract_inverted_index,topics`;
+  const data = await fetchJson(url);
+  return (data.results || [])
+    .filter((w: any) => w.doi && w.title)
+    .map((w: any) => {
+      const doi = extractDoi(w.doi) as string;
+      const abstract = invertedIndexToText(w.abstract_inverted_index);
+      const evidenceLevel = abstract ? 'abstract' : 'metadata';
+      return {
+        title: w.title,
+        authors: (w.authorships || []).map((a: any) => a.author?.display_name).filter(Boolean),
+        year: w.publication_year ?? null,
+        journalOrSource: w.primary_location?.source?.display_name || '',
+        doi,
+        url: doiUrl(doi),
+        abstractSnippet: abstract ? abstract.slice(0, 280) : null,
+        evidenceLevel,
+        evidenceLabel: evidenceLevel === 'abstract' ? '초록 기반' : '메타데이터 기반',
+      };
+    });
+}
+
 app.post('/api/paper-to-lab', async (req: Request, res: Response) => {
   try {
-    const { query, doi } = req.body;
-    const inputStr = doi || query || '';
-
-    // Sample real citations lookup based on input keywords
-    let matchedPaper = {
-      paperMetadata: {
-        title: 'Two New Sciences: Kinematics and the Invariance of Free Fall Acceleration',
-        authors: ['Galileo Galilei', 'Stillman Drake'],
-        year: 1638,
-        journalOrSource: 'Philosophical Transactions of the Royal Society / Elsevier Classic',
-        doi: '10.1038/scientificamerican1973-104',
-        url: 'https://archive.org/details/dialoguesconcern00galiuoft',
-      },
-      researchQuestion: '공기 저항이 배제된 진공 상태에서 물체의 낙하 속도는 질량에 비례하는가, 아니면 질량과 무관하게 일정한 가속도로 낙하하는가?',
-      hypothesis: '진공 속에서는 모든 물체가 질량, 밀도, 형상에 관계없이 동일한 중력 가속도 g로 낙하한다.',
-      scientificPrinciples: [
-        { name: '자유 낙하 등가속도 운동', formula: 'h = 0.5 * g * t^2' },
-        { name: '뉴턴 중력과 관성 질량 등가 원리', formula: 'm_inertial * a = m_gravitational * g' },
-      ],
-      methodologicalLimitations: '현실 지구 환경에서는 대기 밀도(1.225 kg/m³)로 인해 깃털 등 표면적 대 질량비가 큰 물체의 경우 종단 속도가 먼저 형성됩니다.',
-      experimentSpec: PRESET_EXPERIMENTS.gravity,
-    };
-
-    const lower = inputStr.toLowerCase();
-    if (lower.includes('snell') || lower.includes('굴절') || lower.includes('빛') || lower.includes('optic') || lower.includes('refraction')) {
-      matchedPaper = {
-        paperMetadata: {
-          title: 'A Treatise on Wave Optics and Snell\'s Law Invariance',
-          authors: ['Willebrord Snellius', 'Pierre de Fermat'],
-          year: 1621,
-          journalOrSource: 'Caltech Feynman Lectures / Optical Society Memoir',
-          doi: '10.1119/1.1975977',
-          url: 'https://www.feynmanlectures.caltech.edu/I_26.html',
-        },
-        researchQuestion: '빛이 서로 다른 굴절률의 광학 매질 경계면을 통과할 때 최단 시간 경로를 형성하는 굴절 각도의 수학적 법칙은 무엇인가?',
-        hypothesis: '입사각의 사인값과 굴절각의 사인값의 비는 두 매질의 굴절률의 역비 n1*sin(θ1) = n2*sin(θ2)를 정확히 만족한다.',
-        scientificPrinciples: [
-          { name: '스넬의 법칙', formula: 'n1 * sin(θ1) = n2 * sin(θ2)' },
-          { name: '임계각 및 전반사 조건', formula: 'θ_c = arcsin(n2 / n1)' },
-        ],
-        methodologicalLimitations: '본 시뮬레이션은 단색광 레이저의 기하광학적 선형 경로를 모델링하며 파장별 분산(Dispersion)은 일정한 굴절률로 근사됩니다.',
-        experimentSpec: PRESET_EXPERIMENTS.optics,
-      };
-    } else if (lower.includes('fluid') || lower.includes('밀도') || lower.includes('archimedes') || lower.includes('부력')) {
-      matchedPaper = {
-        paperMetadata: {
-          title: 'On Floating Bodies and Hydrostatic Equilibrium',
-          authors: ['Archimedes of Syracuse', 'T. L. Heath'],
-          year: 1897,
-          journalOrSource: 'Cambridge University Press / Royal Society Archive',
-          doi: '10.1098/rsta.2007.2003',
-          url: 'https://archive.org/details/worksofarchimede00arch',
-        },
-        researchQuestion: '서로 다른 밀도를 지닌 비혼화성 유체들은 중력장 내에서 어떠한 질서로 평형 상태를 이루는가?',
-        hypothesis: '중력장 하에서 유체는 밀도가 가장 큰 순서대로 바닥에 안정적인 수평 층을 형성하며, 바닥 정수압은 각 층의 밀도 합산과 일치한다.',
-        scientificPrinciples: [
-          { name: '정수압 평형', formula: 'P = sum(rho_i * g * h_i)' },
-          { name: '계면장력과 비혼화성', formula: 'gamma_{12} > 0' },
-        ],
-        methodologicalLimitations: '실제 유체 분리 시에는 미세 액적(Droplet)의 브라운 운동과 표면 장력 구배가 작용하나, 본 모델은 거시적 층상 성층화로 단순화되었습니다.',
-        experimentSpec: PRESET_EXPERIMENTS.fluid,
-      };
+    const { query, doi } = req.body || {};
+    const inputStr = String(doi || query || '').trim();
+    if (!inputStr) {
+      res.status(400).json({ error: 'query or doi is required' });
+      return;
     }
 
-    res.json({ paperAnalysis: matchedPaper });
+    const foundDoi = extractDoi(inputStr);
+    if (foundDoi) {
+      const analysis = await lookupCrossref(foundDoi);
+      if (!analysis.abstract) {
+        const abs = await fetchOpenAlexAbstract(foundDoi);
+        if (abs) return res.json({ paperAnalysis: buildAnalysis({ ...analysis.paperMetadata, abstract: abs, source: 'openalex', subjects: analysis.subjects }) });
+      }
+      res.json({ paperAnalysis: analysis });
+      return;
+    }
+
+    const candidates = await searchOpenAlex(inputStr);
+    res.json({ candidates, source: 'OpenAlex' });
   } catch (err: any) {
     console.error('Paper to lab error:', err);
-    res.status(500).json({ error: 'Failed to analyze paper', details: err?.message });
+    if (err?.status === 404) {
+      res.status(404).json({ error: 'DOI를 Crossref에서 찾을 수 없습니다.' });
+      return;
+    }
+    res.status(502).json({ error: 'Failed to fetch paper data', details: err?.message });
   }
 });
 

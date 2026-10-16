@@ -1,4 +1,4 @@
-import { calculateFreeFall, GRAVITY_OBJECT_PRESETS } from '../src/engines/gravity.ts';
+import { calculateFreeFall, GRAVITY_OBJECT_PRESETS, simulateFall, analyticFall, sampleAt, FALL_BODY_PRESETS } from '../src/engines/gravity.ts';
 import { calculateOptics } from '../src/engines/optics.ts';
 import { calculateFluidColumn } from '../src/engines/fluid.ts';
 
@@ -31,6 +31,39 @@ console.log('[1] Testing Gravity Engine...');
 
   assert(resFeatherAir.fallTimeAir > resBallAir.fallTimeAir, `Feather falls slower in air than bowling ball (${resFeatherAir.fallTimeAir}s > ${resBallAir.fallTimeAir}s)`);
   assert(resFeatherAir.fallTimeVacuum === resBallAir.fallTimeVacuum, `Feather and bowling ball have identical fall time in vacuum (${resFeatherAir.fallTimeVacuum}s == ${resBallAir.fallTimeVacuum}s)`);
+}
+
+// 1b. Fixed-timestep RK4 fall simulation
+console.log('\n[1b] Testing RK4 fall simulation...');
+{
+  const ball = FALL_BODY_PRESETS.bowling_ball.body;
+  const feather = FALL_BODY_PRESETS.feather.body;
+  const vac = { heightM: 30, gravity: 9.81, airDensity: 0 };
+
+  const simBall = simulateFall(vac, ball);
+  const simFeather = simulateFall(vac, feather);
+  assert(Math.abs(simBall.landingTime - 2.47) < 0.01, `Vacuum h=30m g=9.81 lands at ~2.47s (got ${simBall.landingTime.toFixed(4)})`);
+  assert(Math.abs(simBall.impactVelocity - 24.3) < 0.1, `Vacuum impact speed ~24.3 m/s (got ${simBall.impactVelocity.toFixed(3)})`);
+  assert(Math.abs(simBall.landingTime - simFeather.landingTime) < 1e-6, `Vacuum: bowling ball and feather land simultaneously`);
+  assert(Math.abs(simBall.landingTime - Math.sqrt(60 / 9.81)) / Math.sqrt(60 / 9.81) < 0.0001, `Vacuum simulation matches t = sqrt(2h/g) within 0.01%`);
+
+  const air = { heightM: 30, gravity: 9.81, airDensity: 1.2 };
+  for (const [name, b] of [['bowling ball', ball], ['feather', feather]] as const) {
+    const sim = simulateFall(air, b);
+    const th = analyticFall(air, b);
+    const err = Math.abs(sim.landingTime - th.landingTime) / th.landingTime;
+    assert(err < 0.001, `Air: ${name} RK4 landing time matches closed form within 0.1% (err ${(err * 100).toFixed(4)}%)`);
+    const verr = Math.abs(sim.impactVelocity - th.impactVelocity) / th.impactVelocity;
+    assert(verr < 0.001, `Air: ${name} RK4 impact speed matches closed form within 0.1% (err ${(verr * 100).toFixed(4)}%)`);
+  }
+  const airBall = simulateFall(air, ball);
+  const airFeather = simulateFall(air, feather);
+  assert(airFeather.landingTime > airBall.landingTime * 1.5, `Air: feather lands much later than bowling ball (${airFeather.landingTime.toFixed(2)}s vs ${airBall.landingTime.toFixed(2)}s)`);
+  assert(airFeather.impactVelocity < airFeather.terminalVelocity * 1.0001, `Air: feather speed never exceeds terminal velocity`);
+
+  const mid = sampleAt(simBall, simBall.landingTime / 2);
+  assert(Math.abs(mid.y - (30 - 0.5 * 9.81 * (simBall.landingTime / 2) ** 2)) < 0.01, `sampleAt interpolates height at half-time`);
+  assert(sampleAt(simBall, 99).y === 0, `sampleAt clamps to ground after landing`);
 }
 
 // 2. Optics Engine Tests

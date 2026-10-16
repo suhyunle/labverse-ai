@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
 import { LandingHero } from './components/LandingHero';
 import { VariableControls } from './components/VariableControls';
@@ -13,7 +13,7 @@ import { ResearchTree } from './components/ResearchTree';
 import { PaperToLabModal } from './components/PaperToLabModal';
 import { DiagramToLabModal } from './components/DiagramToLabModal';
 
-import { GravitySimulation } from './simulations/GravitySimulation';
+import { GravitySimulation, GravityRunResult } from './simulations/GravitySimulation';
 import { OpticsSimulation } from './simulations/OpticsSimulation';
 import { FluidSimulation } from './simulations/FluidSimulation';
 import { VolcanoSimulation } from './simulations/VolcanoSimulation';
@@ -80,6 +80,27 @@ export default function App() {
       localStorage.setItem('genesis_lab_research_nodes', JSON.stringify(researchNodes));
     } catch {}
   }, [researchNodes]);
+
+  // Simulations report metrics from effects; bail out when nothing changed so a
+  // re-render cannot feed back into setState (root cause of "Maximum update depth").
+  const handleUpdateMetrics = useCallback((next: Record<string, number | string>) => {
+    setLiveMetrics((prev) => {
+      const keys = Object.keys(next);
+      if (keys.length === Object.keys(prev).length && keys.every((k) => prev[k] === next[k])) return prev;
+      return next;
+    });
+  }, []);
+
+  const handleGravityRunComplete = useCallback((r: GravityRunResult) => {
+    const [a, b] = r.bodies;
+    setLiveMetrics({
+      '물체 A 착지 시간': `${a.simLandingTime.toFixed(3)} 초`,
+      '물체 B 착지 시간': `${b.simLandingTime.toFixed(3)} 초`,
+      '물체 A 착지 속도': `${a.impactVelocity.toFixed(2)} m/s`,
+      '물체 B 착지 속도': `${b.impactVelocity.toFixed(2)} m/s`,
+      '진공 이론 낙하 시간': `${r.vacuumLandingTime.toFixed(3)} 초`,
+    });
+  }, []);
 
   const handleToggleMute = () => {
     const next = !isMuted;
@@ -267,22 +288,24 @@ export default function App() {
           <div className="absolute inset-0 top-14 z-10">
             {currentExperiment.sceneType === 'gravity' && (
               <GravitySimulation
+                variableSpecs={currentExperiment.variables}
                 variables={variables}
-                onUpdateMetrics={setLiveMetrics}
+                onChangeVariable={handleChangeVariable}
+                onRunComplete={handleGravityRunComplete}
               />
             )}
 
             {currentExperiment.sceneType === 'optics' && (
               <OpticsSimulation
                 variables={variables}
-                onUpdateMetrics={setLiveMetrics}
+                onUpdateMetrics={handleUpdateMetrics}
               />
             )}
 
             {currentExperiment.sceneType === 'fluid' && (
               <FluidSimulation
                 variables={variables}
-                onUpdateMetrics={setLiveMetrics}
+                onUpdateMetrics={handleUpdateMetrics}
               />
             )}
 
@@ -291,7 +314,7 @@ export default function App() {
                 variables={variables}
                 cameraPreset={cameraPreset}
                 showCrossSection={showCrossSection}
-                onUpdateMetrics={setLiveMetrics}
+                onUpdateMetrics={handleUpdateMetrics}
               />
             )}
 
@@ -299,7 +322,7 @@ export default function App() {
               <SolarSystemSimulation
                 variables={variables}
                 cameraPreset={cameraPreset}
-                onUpdateMetrics={setLiveMetrics}
+                onUpdateMetrics={handleUpdateMetrics}
               />
             )}
 
@@ -307,7 +330,7 @@ export default function App() {
               <BuoyancySimulation
                 variables={variables}
                 cameraPreset={cameraPreset}
-                onUpdateMetrics={setLiveMetrics}
+                onUpdateMetrics={handleUpdateMetrics}
               />
             )}
 
@@ -315,18 +338,20 @@ export default function App() {
               <ConceptualSimulation
                 variables={variables}
                 cameraPreset={cameraPreset}
-                onUpdateMetrics={setLiveMetrics}
+                onUpdateMetrics={handleUpdateMetrics}
               />
             )}
           </div>
 
           {/* Real-time Telemetry HUD (Top-right) */}
+          {currentExperiment.sceneType !== 'gravity' && (
           <TelemetryDisplay
             metrics={liveMetrics}
             observableSpecs={currentExperiment.observableOutputs}
             principles={currentExperiment.scientificPrinciples}
             safetyNotes={currentExperiment.safetyNotes}
           />
+          )}
 
           {/* AI Scientist Companion (Dr. Nova) */}
           <ScientistCompanion
@@ -337,13 +362,16 @@ export default function App() {
           />
 
           {/* Guided Steps & Learning Objectives (Bottom-left) */}
+          {currentExperiment.sceneType !== 'gravity' && (
           <GuidedSteps
             learningObjectives={currentExperiment.learningObjectives}
             guidedSteps={currentExperiment.guidedSteps}
             currentVariables={variables}
           />
+          )}
 
           {/* Sleek Collapsible Variable Control Dock (Bottom-center) */}
+          {currentExperiment.sceneType !== 'gravity' && (
           <VariableControls
             variables={currentExperiment.variables}
             values={variables}
@@ -356,6 +384,7 @@ export default function App() {
             isPlaying={isPlaying}
             onTogglePlay={() => setIsPlaying(!isPlaying)}
           />
+          )}
 
           {/* Lab Notebook & Snapshot Comparator Modal */}
           <LabNotebookModal

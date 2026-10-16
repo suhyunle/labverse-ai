@@ -47,7 +47,7 @@ export const ParallelUniverseMode: React.FC<ParallelUniverseModeProps> = ({
   const renderSim = (vars: Record<string, number>, onUpdate: (m: Record<string, number | string>) => void) => {
     switch (experimentSpec.sceneType) {
       case 'gravity':
-        return <GravitySimulation variables={vars} onUpdateMetrics={onUpdate} />;
+        return <GravitySimulation variableSpecs={experimentSpec.variables} variables={vars} onChangeVariable={() => {}} />;
       case 'optics':
         return <OpticsSimulation variables={vars} onUpdateMetrics={onUpdate} />;
       case 'fluid':
@@ -57,7 +57,7 @@ export const ParallelUniverseMode: React.FC<ParallelUniverseModeProps> = ({
       case 'solar_system':
         return <SolarSystemSimulation variables={vars} cameraPreset="heliocentric" onUpdateMetrics={onUpdate} />;
       default:
-        return <GravitySimulation variables={vars} onUpdateMetrics={onUpdate} />;
+        return <GravitySimulation variableSpecs={experimentSpec.variables} variables={vars} onChangeVariable={() => {}} />;
     }
   };
 
